@@ -73,7 +73,7 @@ Want an AI assistant to set it up with you? See [LLM_SETUP.md](LLM_SETUP.md).
 | `financial_plan validate [dir]` | Check the config and CSVs. |
 | `financial_plan inspect-csv FILE` | Show a CSV's columns and a suggested source entry. |
 | `financial_plan categorize [dir] [--unmatched]` | Category averages; rows no rule caught. |
-| `financial_plan launcher` | Mac: add Financial Planner.app to Applications. Elsewhere: a desktop shortcut. |
+| `financial_plan launcher` | Mac: add Financial Planner.app to /Applications. Elsewhere: a desktop shortcut. |
 
 Details: [Command Line](https://github.com/brookisme/financial_planner/wiki/Command-Line).
 
