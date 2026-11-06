@@ -8,7 +8,7 @@ college savings, retirement and how spending changes over time.
 
 **Full documentation: [the wiki](https://github.com/brookisme/financial_planner/wiki).**
 
-<p align="center"><img src="assets/app-overview.png" height="350" alt="The Financial Planner app, showing the monthly planner and the retirement section with fictional demo data"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/brookisme/financial_planner/main/assets/app-overview.png" height="350" alt="The Financial Planner app, showing the monthly planner and the retirement section with fictional demo data"></p>
 
 ## Contents
 
@@ -62,7 +62,7 @@ opens in the browser). A no-code download is described in the
 [Desktop App](https://github.com/brookisme/financial_planner/wiki/Desktop-App) page.
 
 Step-by-step guide: [Quick Start](https://github.com/brookisme/financial_planner/wiki/Quick-Start).
-Want an AI assistant to set it up with you? See [LLM_SETUP.md](LLM_SETUP.md).
+Want an AI assistant to set it up with you? See [LLM_SETUP.md](https://github.com/brookisme/financial_planner/blob/main/LLM_SETUP.md).
 
 ## Commands
 
