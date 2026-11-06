@@ -1,0 +1,33 @@
+# Your plan. Edit here or with the gear icon (top right) in the app.
+# Privacy: this folder holds your financial data. Keep it on your own computer, don't commit it to
+# a public repository, and prefer generic names (Partner A, Child 1) over real ones.
+
+plan:
+  title: Household Budget
+  subtitle: ''
+  months: 12            # average over the last 12 months of transactions
+
+household:
+  partners:
+    - name: Partner A
+      age: 40
+      take_home_monthly: 0      # net pay per month
+      raise_pct: 0              # yearly raise above inflation
+      social_security:
+        at_67: 0                # monthly estimate from your Social Security statement
+      pensions: []              # e.g. - {name: Pension, estimates: {55: 900, 60: 2800, 65: 5800}}
+      accounts: []              # e.g. - {name: 401(k), balance: 50000, monthly: 500}
+  children: []                  # e.g. - {name: Child 1, age: 8, college_529: {balance: 10000, monthly: 250}}
+
+other_income_monthly: 0
+savings: []                     # e.g. - {name: Emergency savings, monthly: 300}
+investments: []                 # e.g. - {name: Brokerage, balance: 20000, return_pct: 6}
+
+assumptions:
+  retirement:
+    return_pct: 5.5
+    inflation_pct: 3
+    withdrawal_pct: 4
+    tax_pct: 12
+    health_insurance_monthly: 0
+    default_age: 65
