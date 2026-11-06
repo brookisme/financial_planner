@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Financial Planner app icon. License: BSD 3-Clause -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#26332e"/>
+      <stop offset="1" stop-color="#121715"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  <!-- baseline -->
+  <rect x="236" y="736" width="552" height="10" rx="5" fill="#3a4441"/>
+  <!-- rising bars (the app's chart colors) -->
+  <rect x="256" y="536" width="104" height="190" rx="18" fill="#3987e5"/>
+  <rect x="408" y="436" width="104" height="290" rx="18" fill="#1baf7a"/>
+  <rect x="560" y="356" width="104" height="370" rx="18" fill="#3987e5"/>
+  <rect x="712" y="276" width="56" height="450" rx="18" fill="#eda100"/>
+  <!-- the dotted "average + savings" line -->
+  <line x1="236" y1="300" x2="788" y2="300" stroke="#eb6834" stroke-width="16" stroke-linecap="round" stroke-dasharray="2 34"/>
+</svg>
