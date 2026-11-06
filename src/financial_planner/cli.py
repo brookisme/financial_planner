@@ -8,7 +8,7 @@ The ``financial_plan`` command:
 - ``validate [dir]``: check the config and CSVs and print a summary.
 - ``inspect-csv FILE``: show a CSV's columns and a suggested ``sources`` entry.
 - ``categorize [dir]``: print per-category averages; ``--unmatched`` lists rows no rule caught.
-- ``launcher``: make a double-click launcher (macOS: ``Financial Planner.app`` in ~/Applications).
+- ``launcher``: make a double-click launcher (macOS: ``Financial Planner.app`` in /Applications).
 
 License: BSD 3-Clause
 """
@@ -160,9 +160,9 @@ def _parser() -> argparse.ArgumentParser:
     p.set_defaults(func=_cmd_categorize)
 
     p = sub.add_parser('launcher', help='create a double-click launcher (macOS: an app in '
-                                        '~/Applications)')
+                                        '/Applications)')
     p.add_argument('--plan-dir', help='plan to open (default: the last one used, or ask)')
-    p.add_argument('--desktop', help='folder for the launcher (default: ~/Applications on macOS, '
+    p.add_argument('--desktop', help='folder for the launcher (default: /Applications on macOS, '
                                      '~/Desktop elsewhere)')
     p.set_defaults(func=_cmd_launcher)
     return parser
