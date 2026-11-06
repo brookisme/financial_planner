@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <!-- Menu-bar icon. In color so it shows on light and dark menu bars. License: BSD 3-Clause -->
+  <rect x="6" y="34" width="11" height="22" rx="2.5" fill="#3987e5"/>
+  <rect x="20" y="24" width="11" height="32" rx="2.5" fill="#1baf7a"/>
+  <rect x="34" y="14" width="11" height="42" rx="2.5" fill="#3987e5"/>
+  <rect x="48" y="6" width="10" height="50" rx="2.5" fill="#eda100"/>
+</svg>
