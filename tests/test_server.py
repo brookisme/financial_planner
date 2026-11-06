@@ -88,6 +88,17 @@ def test_add_rules(client: TestClient, plan_dir: Path) -> None:
     assert next(r for r in rows if r['id'] == taco['id'])['category'] == 'Groceries'
 
 
+def test_plan_export(client: TestClient) -> None:
+    import io
+    import zipfile
+    res = client.get('/api/plan/export')
+    assert res.status_code == 200 and res.headers['content-type'] == 'application/zip'
+    assert 'Test%20plan%20' in res.headers['content-disposition']
+    names = zipfile.ZipFile(io.BytesIO(res.content)).namelist()
+    assert any(n.endswith('/config/rules.yaml') for n in names)
+    assert any(n.endswith('/data/card.csv') for n in names)
+
+
 def test_upload_inspect_and_source_preview(client: TestClient) -> None:
     up = client.post('/api/files?name=../../evil name.csv', headers=HEADERS,
                      content=b'When,What,How much\n2025-03-01,Thing,-5.00\n')
