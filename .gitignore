@@ -1,0 +1,21 @@
+# environments
+.pixi/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# frontend
+web/node_modules/
+
+# app state written next to a plan (planner edits, scenarios)
+.financial_planner/
+
+# never commit real financial data: only the fake demo data is tracked
+*.csv
+!examples/demo/data/*.csv
+!tests/fixtures/*.csv
+
+.DS_Store
