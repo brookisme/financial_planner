@@ -195,12 +195,12 @@
     });
     return { st, cs, rs, fs };
   }
-  function rebase(defs, saved, base) {
+  function rebase(defs, saved2, base) {
     const out = clone(defs);
-    if (!saved) return out;
+    if (!saved2) return out;
     const baseMap = new Map(flatten(base ?? {}).map(([k, v]) => [k, v]));
     const defMap = new Map(flatten(defs).map(([k, v]) => [k, v]));
-    for (const [key, value] of flatten(saved)) {
+    for (const [key, value] of flatten(saved2)) {
       if (!defMap.has(key)) continue;
       if (base && baseMap.has(key) && same(baseMap.get(key), value)) continue;
       setPath(out, JSON.parse(key), value);
@@ -1946,6 +1946,8 @@
 <h3 id="h-faq">Questions</h3>
 <dl class="faq">
   <dt>Why is a box blue?</dt><dd>You changed it from its starting value.</dd>
+  <dt>Can I switch between light and dark?</dt><dd>Yes: <i>Auto / Light / Dark</i> next to
+    Settings. Auto follows your computer's setting. The choice is remembered in this browser.</dd>
   <dt>Where are my changes kept?</dt><dd>In <span class="mono">.financial_planner/state.json</span>
     inside the plan folder. Settings are in the YAML files.</dd>
   <dt>I changed the YAML by hand. Do I need to restart?</dt><dd>No, just reload the page.</dd>
@@ -2276,8 +2278,8 @@
   // src/ui/scenarios.ts
   var CODE_PREFIX = "FP1:";
   async function buildScenarios() {
-    const saved = await get("/api/state");
-    scen = { list: saved.scenarios?.list ?? [], active: saved.scenarios?.active ?? null };
+    const saved2 = await get("/api/state");
+    scen = { list: saved2.scenarios?.list ?? [], active: saved2.scenarios?.active ?? null };
     wireBar();
     wireShare();
     wireCompare();
@@ -3492,6 +3494,47 @@
     }
   }
 
+  // src/ui/theme.ts
+  var KEY = "fp-theme";
+  function buildTheme() {
+    const group = document.getElementById("theme");
+    if (!group) return;
+    const buttons = [...group.querySelectorAll("button")];
+    const mark = (t) => buttons.forEach((b) => b.setAttribute(
+      "aria-pressed",
+      String(b.dataset.v === t)
+    ));
+    mark(saved());
+    buttons.forEach((b) => b.addEventListener("click", () => {
+      const t = b.dataset.v;
+      apply(t);
+      try {
+        if (t === "auto") localStorage.removeItem(KEY);
+        else localStorage.setItem(KEY, t);
+      } catch {
+      }
+      mark(t);
+    }));
+  }
+  function saved() {
+    try {
+      const t = localStorage.getItem(KEY);
+      return t === "light" || t === "dark" ? t : "auto";
+    } catch {
+      return "auto";
+    }
+  }
+  function apply(t) {
+    const root = document.documentElement;
+    if (t === "auto") {
+      delete root.dataset.theme;
+      root.style.colorScheme = "";
+    } else {
+      root.dataset.theme = t;
+      root.style.colorScheme = t;
+    }
+  }
+
   // src/main.ts
   var ready = false;
   function route() {
@@ -3524,6 +3567,7 @@
   }
   async function start() {
     buildHelp();
+    buildTheme();
     window.addEventListener("hashchange", route);
     let p;
     try {
