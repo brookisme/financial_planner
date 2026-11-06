@@ -197,6 +197,27 @@ export function setPath(o: Record<string, unknown>, path: string[], value: unkno
   cur[path[path.length - 1]] = value;
 }
 
+/**
+ * The line under the title when plan.subtitle is empty: which sources (by configured name) the
+ * numbers come from, how many transactions over which months, and where take-home pay came from.
+ * @param p The payload.
+ */
+export function describeData(p: Payload): string {
+  const counts = new Map<number, number>();
+  p.tx.forEach((t) => counts.set(t[4], (counts.get(t[4]) ?? 0) + 1));
+  const used = p.sources.filter((_, i) => counts.get(i));
+  if (!used.length) return 'No transactions yet: add your CSV exports in Settings › Data sources.';
+  const list = (xs: string[]) => xs.length < 2 ? xs.join('') :
+      `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`;
+  const months = p.month_labels;
+  let s = `Built from ${list(used)} (${p.tx.length.toLocaleString('en-US')} transactions, ${
+      months[0]} – ${months[months.length - 1]}).`;
+  const notes = p.household.partners.filter((x) => x.take_home_note)
+      .map((x) => `${x.name} (${x.take_home_note})`);
+  if (notes.length) s += ` Take-home pay: ${notes.join(', ')}.`;
+  return `${s} Change any number in the planner to see what it does to the month.`;
+}
+
 // ---------- the monthly budget ----------
 
 /** Planned regular spending (before credits). */
