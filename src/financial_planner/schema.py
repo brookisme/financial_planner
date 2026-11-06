@@ -51,7 +51,8 @@ class PlanInfo(_Model):
 
     Attributes:
         title: Page title.
-        subtitle: Short description under the title.
+        subtitle: Line under the title. Empty: generated from the data sources, the months
+            covered and the partners' take-home notes.
         today: The plan's "now" as YYYY-MM. Defaults to the month after the averaging window.
         months: How many months of transactions to average over.
         last_month: Last month of the averaging window (YYYY-MM). Defaults to the month of the
