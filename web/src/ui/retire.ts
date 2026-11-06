@@ -1,0 +1,411 @@
+/**
+ * @fileoverview Retirement: age slider, income breakdown, stacked chart by age, summary table,
+ * and panels for every pension, account, investment and Social Security.
+ *
+ * License: BSD 3-Clause
+ */
+
+import {$, $in, app, changed, hideTip, num, onChange, showTip} from '../app';
+import {esc, fk, fmt, niceStep, sum} from '../format';
+import {clone, type IncomePart, retirementIncome, retireYear, spendAt, spendToday,
+        ssFactor} from '../model';
+
+//
+// CONSTANTS
+//
+const TABLE_AGES = [55, 58, 60, 62, 65, 67, 70];
+
+//
+// PUBLIC
+//
+
+/** Builds the retirement section. */
+export function buildRetire(): void {
+  const d = app.d;
+  const p = d.primary;
+  lo = Math.max(55, Math.ceil(p.age));
+  hi = Math.max(lo + 5, 70);
+  const ra = $in('ra');
+  ra.min = String(lo);
+  ra.max = String(Math.max(hi, 75));
+  $('ra-who').textContent = `${p.name} retires at`;
+  $('retire-sub').textContent = `Monthly income at each retirement age, in today's dollars. ${
+      d.partners.map((x) => `${x.name} is ${x.age}`).join(', ')}.${d.partners.length > 1 ?
+      ' Everyone retires in the same year.' : ''}`;
+  buildPanels();
+  buildAssumptions();
+  ra.addEventListener('input', () => {
+    app.S.rs.age = +ra.value;
+    changed();
+  });
+  $('r-reset').addEventListener('click', () => {
+    app.S.rs = clone(app.defs.rs);
+    fillRetire();
+    changed();
+  });
+  onChange(drawRetire);
+  fillRetire();
+  drawRetire();
+}
+
+/** Fills every retirement input from the settings. */
+export function fillRetire(): void {
+  const rs = app.S.rs;
+  $in('ra').value = String(rs.age);
+  $in('r-ret').value = String(rs.ret);
+  $in('r-inf').value = String(rs.inf);
+  $in('r-wd').value = String(rs.wd);
+  document.querySelectorAll<HTMLInputElement>('[data-r]').forEach((el) => {
+    const v = getR(el.dataset.r!);
+    if (el.type === 'checkbox') el.checked = !!v;
+    else el.value = v == null ? '' : String(v);
+  });
+  document.querySelectorAll<HTMLSelectElement>('select[data-claim]').forEach((el) => {
+    const v = rs.claim[el.dataset.claim!];
+    el.value = v == null ? '' : String(v);
+  });
+}
+
+//
+// INTERNAL
+//
+let lo = 55;
+let hi = 70;
+
+/** Color for an income part. */
+function partColor(x: IncomePart): string {
+  if (x.kind === 'pension') return '--r1';
+  if (x.kind === 'investment') return '--r5';
+  if (x.kind === 'ss') return '--r4';
+  return x.partner === app.d.primary.id ? '--r2' : '--r3';
+}
+
+/** Reads a dotted settings path under rs (e.g. "pen.a:0.est.55"). */
+function getR(path: string): unknown {
+  const parts = splitPath(path);
+  let cur: unknown = app.S.rs;
+  for (const k of parts) cur = (cur as Record<string, unknown>)?.[k];
+  return cur;
+}
+
+/** Writes a dotted settings path under rs. */
+function setR(path: string, v: unknown): void {
+  const parts = splitPath(path);
+  let cur = app.S.rs as unknown as Record<string, unknown>;
+  parts.slice(0, -1).forEach((k) => cur = cur[k] as Record<string, unknown>);
+  cur[parts[parts.length - 1]] = v;
+}
+
+/** Splits "pen|a:0|est|55" style paths. */
+function splitPath(path: string): string[] {
+  return path.split('|');
+}
+
+/** A numeric input bound to a settings path. */
+function numInput(path: string, label: string, step = 50, wide = false): string {
+  return `<div class="row"><label>${esc(label)}</label><input class="amt" type="number" step="${
+      step}" inputmode="decimal" data-r="${esc(path)}"${wide ? ' style="width:120px"' : ''}></div>`;
+}
+
+/** Side panels: pensions, accounts, investments, Social Security. */
+function buildPanels(): void {
+  const d = app.d;
+  let h = '';
+  d.partners.forEach((p) => {
+    p.pensions.forEach((pn, i) => {
+      const key = `${p.id}:${i}`;
+      const ests = Object.keys(pn.estimates).sort((a, b) => +a - +b);
+      h += `<div class="panel" data-pane="pen|${esc(key)}|on"><label class="toggle"><input
+        type="checkbox" data-r="pen|${esc(key)}|on"><h3>${esc(pn.name)} <span class="small muted">${
+        esc(p.name)}</span></h3></label>` + (pn.monthly != null ?
+          numInput(`pen|${key}|monthly`, 'Monthly benefit') :
+          `<p class="small muted">Monthly estimates by retirement age. Ages in between are
+            interpolated${pn.service_years_now != null ?
+              '; after the last age it grows with years of service' : ''}.</p>
+          <div class="est">${ests.map((a) => `<label>Age ${esc(a)}<input class="amt"
+            type="number" step="50" inputmode="decimal" data-r="pen|${esc(key)}|est|${esc(a)}">
+            </label>`).join('')}</div>`) + '</div>';
+    });
+    p.accounts.forEach((ac, i) => {
+      const key = `${p.id}:${i}`;
+      h += `<div class="panel" data-pane="acct|${esc(key)}|on"><label class="toggle"><input
+        type="checkbox" data-r="acct|${esc(key)}|on"><h3>${esc(ac.name)} <span class="small muted">${
+        esc(p.name)}</span></h3></label>${numInput(`acct|${key}|bal`, 'Balance today', 1000, true)}${
+        numInput(`acct|${key}|monthly`, 'Adding per month')}<p class="small muted">Grows at the
+        return rate; contributions continue until retirement.</p></div>`;
+    });
+  });
+  d.p.investments.forEach((v) => {
+    h += `<div class="panel" id="pn-inv-${esc(v.id)}"><h3>${esc(v.name)}</h3>${
+        numInput(`inv|${v.id}|bal`, 'Balance today', 1000, true)}
+      <div class="row"><span>Adding per month</span><span><span class="num" id="r-ic-${
+        esc(v.id)}"></span> <a class="small" href="#planner">set in the planner</a></span></div>
+      <div class="ctl"><label>Return on this account</label><span class="num" id="r-ir-${
+        esc(v.id)}"></span><input type="range" min="0" max="10" step="0.5" data-r="inv|${
+        esc(v.id)}|ret"></div>
+      <p class="small muted" id="r-inote-${esc(v.id)}"></p></div>`;
+  });
+  if (d.partners.length) {
+    h += `<div class="panel" data-pane="ss"><label class="toggle"><input type="checkbox"
+      data-r="ss"><h3>Social Security</h3></label><p class="small muted">Monthly benefit at full
+      retirement age (67), in today's dollars. Get real estimates from your Social Security
+      statement.</p>` + d.partners.map((p) => numInput(`ssAmt|${p.id}`, `${p.name} at 67`) +
+        `<div class="row"><label for="claim-${esc(p.id)}">${esc(p.name)} claims at</label><select
+          id="claim-${esc(p.id)}" data-claim="${esc(p.id)}" class="amt" style="width:auto"><option
+          value="">when retiring (62+)</option>${[62, 63, 64, 65, 66, 67, 68, 69, 70].map((a) =>
+            `<option value="${a}">${a}</option>`).join('')}</select></div>`).join('') +
+      `<p class="small muted">Claiming at 62 pays 70% of the age-67 amount, and waiting until 70
+      pays 124%. A benefit starts at the chosen age, or at retirement if that's later.</p></div>`;
+  }
+  const box = $('r-panels');
+  box.innerHTML = h;
+  box.querySelectorAll<HTMLInputElement>('[data-r]').forEach((el) => {
+    el.addEventListener(el.type === 'checkbox' ? 'change' : 'input', () => {
+      setR(el.dataset.r!, el.type === 'checkbox' ? el.checked :
+          el.type === 'range' ? +el.value : num(el));
+      changed();
+    });
+  });
+  box.querySelectorAll<HTMLSelectElement>('select[data-claim]').forEach((el) => {
+    el.addEventListener('change', () => {
+      app.S.rs.claim[el.dataset.claim!] = el.value === '' ? null : +el.value;
+      changed();
+    });
+  });
+}
+
+/** Raises, presets and the rate sliders. */
+function buildAssumptions(): void {
+  const d = app.d;
+  $('r-raises').innerHTML = d.partners.map((p) => `<div class="ctl"><label>${esc(p.name)} yearly
+    raise <span class="small muted">above inflation</span></label><span class="num" id="raise-v-${
+    esc(p.id)}"></span><input type="range" min="0" max="5" step="0.25" data-r="raise|${
+    esc(p.id)}"></div>`).join('');
+  $('r-raises').querySelectorAll<HTMLInputElement>('[data-r]').forEach((el) => {
+    el.addEventListener('input', () => {
+      setR(el.dataset.r!, +el.value);
+      changed();
+    });
+  });
+  const presets = d.p.assumptions.retirement.presets;
+  $('r-scen').innerHTML = Object.entries(presets).map(([k, p]) => `<label><input type="checkbox"
+    data-rp="${esc(k)}">${esc(p.name)} <span class="small muted">${p.return_pct}% / ${
+    p.inflation_pct}%</span></label>`).join('');
+  $('r-scen').querySelectorAll<HTMLInputElement>('[data-rp]').forEach((cb) => {
+    cb.addEventListener('change', () => {
+      const p = presets[cb.dataset.rp!];
+      app.S.rs.ret = p.return_pct;
+      app.S.rs.inf = p.inflation_pct;
+      fillRetire();
+      changed();
+    });
+  });
+  ([['r-ret', 'ret'], ['r-inf', 'inf'], ['r-wd', 'wd']] as const).forEach(([id, key]) => {
+    $in(id).addEventListener('input', () => {
+      app.S.rs[key] = +$in(id).value;
+      changed();
+    });
+  });
+}
+
+/** Redraws the breakdown, chart and table. */
+function drawRetire(): void {
+  const {d, S} = app;
+  const rs = S.rs;
+  $in('ra').value = String(rs.age);
+  document.querySelectorAll<HTMLElement>('[data-pane]').forEach((el) => {
+    el.classList.toggle('pane-off', !getR(el.dataset.pane!));
+  });
+  $('r-ret-v').textContent = `${rs.ret}%`;
+  $('r-inf-v').textContent = `${rs.inf}%`;
+  $('r-wd-v').textContent = `${rs.wd}%`;
+  d.partners.forEach((p) => {
+    const el = document.getElementById(`raise-v-${p.id}`);
+    if (el) el.textContent = `${rs.raise[p.id] ?? 0}%`;
+    const r = document.querySelector<HTMLInputElement>(`[data-r="raise|${CSS.escape(p.id)}"]`);
+    if (r) r.value = String(rs.raise[p.id] ?? 0);
+  });
+  const presets = d.p.assumptions.retirement.presets;
+  document.querySelectorAll<HTMLInputElement>('[data-rp]').forEach((cb) => {
+    const p = presets[cb.dataset.rp!];
+    cb.checked = p.return_pct === rs.ret && p.inflation_pct === rs.inf;
+  });
+  d.p.investments.forEach((v) => {
+    const st = rs.inv[v.id];
+    const monthly = S.st.sav[`inv:${v.id}`] ?? 0;
+    const on = st.bal > 0 || monthly > 0;
+    $(`pn-inv-${v.id}`).classList.toggle('pane-off', !on);
+    $(`r-ic-${v.id}`).textContent = fmt(monthly);
+    $(`r-ir-${v.id}`).textContent = `${st.ret}%`;
+    $(`r-inote-${v.id}`).textContent = !on ?
+        'Off until you enter a balance here or a monthly amount in the planner.' :
+        `Its own return rate, separate from the presets.${st.ret < rs.inf ?
+            ` At ${st.ret}% it grows slower than ${rs.inf}% inflation, so it loses buying power.` :
+            ''} Turned into monthly income at the withdrawal rate.`;
+  });
+  const R = retirementIncome(d, S, rs.age);
+  const ry = retireYear(d, rs);
+  const sp = spendAt(d, S, ry).spend;
+  const net = 1 - S.fs.tax / 100;
+  const today = spendToday(d, S.st);
+  $('ra-v').textContent = String(rs.age);
+  $('ra-when').textContent = `${ry - 1} · ${Math.round(R.yrs)} years from now`;
+  const who = (id: string) => d.partners.find((p) => p.id === id)?.name ?? '';
+  const row = (x: IncomePart) => {
+    let sub = '';
+    if (x.balance != null) {
+      sub = `${fmt(x.balance)} balance · ${fmt(x.balance / Math.pow(1 + rs.inf / 100, R.yrs))} in today's $`;
+    }
+    if (x.kind === 'pension') sub = who(x.partner);
+    if (x.kind === 'ss') {
+      sub = x.started ? `claimed at ${Math.floor(x.claimAge!)} · ${
+          Math.round(ssFactor(x.claimAge!) * 100)}% of age-67 amount` :
+          `starts ${x.start} at ${Math.ceil(x.claimAge! - 0.01)}: +${fmt(x.value)}/mo`;
+    }
+    return `<i class="sw" style="background:var(${partColor(x)})"></i><span>${esc(x.name)}${
+        sub ? ` <span class="small muted">${esc(sub)}</span>` : ''}</span><span class="num">${
+        fmt(x.started ? x.value : 0)}/mo</span>`;
+  };
+  const gapRow = (lbl: string, v: number) => {
+    const c = sp ? v / sp : 0;
+    const ok = c >= 1;
+    return `<span></span><span><b>${ok ? lbl.replace('Gap', 'Surplus') : lbl}</b> <span
+      class="small muted">${Math.round(c * 100)}% covered</span></span><span class="num ${
+      ok ? 'pos' : 'neg'}"><b>${ok ? '+' : ''}${fmt(v - sp)}</b></span>`;
+  };
+  $('r-parts').innerHTML = R.parts.map(row).join('') +
+      `<span></span><span class="tot">Income at retirement, before tax</span><span class="num tot">${
+        fmt(R.total)}/mo</span>` +
+      `<span></span><span class="muted">Income tax (${S.fs.tax}%)</span><span class="num muted">(${
+        fmt(R.total * S.fs.tax / 100)})</span>` +
+      `<span></span><span><b>After tax</b></span><span class="num"><b>${fmt(R.total * net)}/mo</b></span>` +
+      (R.later > 0 ? `<span></span><span><b>After tax, once all Social Security starts</b> <span
+        class="small muted">from ${R.fullYear}</span></span><span class="num"><b>${
+        fmt(R.full * net)}/mo</b></span>` : '') +
+      `<span></span><span>Projected spending in retirement <span class="small muted">children
+        gone, retirement changes, health insurance · today it's ${fmt(today)}</span></span><span
+        class="num">${fmt(sp)}/mo</span>` +
+      gapRow(R.later > 0 ? 'Gap at retirement' : 'Gap each month', R.total * net) +
+      (R.later > 0 ? gapRow(`Gap from ${R.fullYear} on`, R.full * net) : '');
+  // legend
+  const kinds: Array<[string, string]> = [];
+  R.parts.forEach((x) => {
+    const lbl = x.kind === 'pension' ? 'Pensions' : x.kind === 'investment' ? 'Investments' :
+        x.kind === 'ss' ? 'Social Security' :
+        x.partner === d.primary.id ? `${d.primary.name}'s accounts` : 'Other accounts';
+    if (!kinds.some(([l]) => l === lbl)) kinds.push([lbl, partColor(x)]);
+  });
+  $('r-legend').innerHTML = kinds.map(([l, c]) => `<span><i class="sw" style="background:var(${
+      c})"></i>${esc(l)}</span>`).join('') +
+      `<span><i class="sw" style="border:2px solid var(--r4);background:transparent"></i>Social Security starting later</span><span><i class="ln proj"></i>Projected retirement spending</span><span><i class="ln today"></i>Spending today</span>`;
+  drawChart(today);
+  drawTable();
+}
+
+/** Stacked income bars by retirement age with spending lines. */
+function drawChart(today: number): void {
+  const {d, S} = app;
+  const net = 1 - S.fs.tax / 100;
+  const ages = [];
+  for (let a = lo; a <= hi; a++) ages.push(retirementIncome(d, S, a));
+  const svg = $('rchart');
+  const W = 960;
+  const H = 300;
+  const L = 56;
+  const Rr = 12;
+  const T = 14;
+  const B = 30;
+  const pw = W - L - Rr;
+  const ph = H - T - B;
+  const bw = pw / ages.length;
+  const base0 = Math.round(d.todayYear - d.primary.age);
+  const spA = ages.map((x) => spendAt(d, S, base0 + 1 + x.age).spend);
+  const max = Math.max(today, ...spA, ...ages.map((x) => x.full * net), 1);
+  const step = niceStep(max);
+  const top = Math.ceil(max / step) * step;
+  const y = (v: number) => T + ph - (v / top) * ph;
+  let g = '';
+  for (let v = 0; v <= top + 1e-6; v += step) {
+    g += `<line class="grid" x1="${L}" x2="${W - Rr}" y1="${y(v)}" y2="${y(v)}"/><text x="${
+        L - 8}" y="${y(v) + 4}" text-anchor="end">${fk(v)}</text>`;
+  }
+  const order = ['pension', 'account', 'investment', 'ss'];
+  ages.forEach((x, i) => {
+    const bx = L + i * bw + bw * 0.16;
+    const w = bw * 0.68;
+    let base = T + ph;
+    let segs = '';
+    const started = x.parts.filter((p) => p.started)
+        .sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind));
+    started.forEach((p) => {
+      const h = ph * p.value * net / top;
+      if (h > 0.5) {
+        base -= h;
+        segs += `<rect x="${bx}" y="${base}" width="${w}" height="${Math.max(h - 2, 0.5)}" rx="2" style="fill:var(${partColor(p)})"/>`;
+      }
+    });
+    if (x.later > 0) {
+      const h = ph * x.later * net / top;
+      base -= h;
+      segs += `<rect x="${bx + 1}" y="${base + 1}" width="${w - 2}" height="${Math.max(h - 3, 0.5)}" rx="2" style="fill:none;stroke:var(--r4);stroke-width:2;stroke-dasharray:4 3"/>`;
+    }
+    const tip = `<b>Age ${x.age} · ${base0 + x.age}</b>` +
+        started.map((p) => `<br>${esc(p.name)} ${fmt(p.value)}`).join('') +
+        `<br><b>After tax ${fmt(x.total * net)}/mo</b>` +
+        (x.later > 0 ? `<br>+ ${fmt(x.later * net)} Social Security from ${x.fullYear}<br><b>Then ${
+            fmt(x.full * net)}/mo</b>` : '') + `<br>Projected spending ${fmt(spA[i])}/mo`;
+    g += `<g class="m" data-a="${x.age}" data-tip="${tip.replace(/"/g, '&quot;')}">${segs}<rect class="hit" x="${
+        L + i * bw}" y="${T}" width="${bw}" height="${ph}"/><text x="${L + i * bw + bw / 2}" y="${
+        H - 10}" text-anchor="middle" ${x.age === S.rs.age ? 'class="selage"' : ''}>${x.age}</text></g>`;
+  });
+  g += `<line class="halo" x1="${L}" x2="${W - Rr}" y1="${y(today)}" y2="${y(today)}"/><line class="todayline" x1="${
+      L}" x2="${W - Rr}" y1="${y(today)}" y2="${y(today)}"/>`;
+  ages.forEach((_, i) => {
+    const x1 = L + i * bw + bw * 0.08;
+    const x2 = L + (i + 1) * bw - bw * 0.08;
+    g += `<line class="halo" x1="${x1}" x2="${x2}" y1="${y(spA[i])}" y2="${y(spA[i])}"/><line class="projline" x1="${
+        x1}" x2="${x2}" y1="${y(spA[i])}" y2="${y(spA[i])}"/>`;
+  });
+  svg.innerHTML = g;
+  svg.querySelectorAll<SVGGElement>('g.m').forEach((el) => {
+    el.addEventListener('mousemove', (e) => showTip(e, el.dataset.tip!));
+    el.addEventListener('mouseleave', hideTip);
+    el.addEventListener('click', () => {
+      app.S.rs.age = +el.dataset.a!;
+      changed();
+    });
+  });
+}
+
+/** Summary table for a few ages. */
+function drawTable(): void {
+  const {d, S} = app;
+  const net = 1 - S.fs.tax / 100;
+  const base0 = Math.round(d.todayYear - d.primary.age);
+  const ages = TABLE_AGES.filter((a) => a >= lo && a <= hi);
+  if (!ages.includes(S.rs.age)) ages.push(S.rs.age);
+  ages.sort((a, b) => a - b);
+  const kinds = ['pension', 'account', 'investment', 'ss'].filter((k) =>
+      retirementIncome(d, S, S.rs.age).parts.some((p) => p.kind === k));
+  const names: Record<string, string> = {pension: 'Pensions', account: 'Accounts',
+    investment: 'Investments', ss: 'Soc. Sec.'};
+  $('rtable').innerHTML = `<tr>${d.partners.map((p) => `<th>${esc(p.name)}</th>`).join('')}<th>Year</th>${
+      kinds.map((k) => `<th>${names[k]}</th>`).join('')}<th>After tax</th><th>Once SS starts</th><th>Projected spending</th><th>vs spending, long run</th></tr>` +
+      ages.map((a) => {
+        const x = retirementIncome(d, S, a);
+        const sa = spendAt(d, S, base0 + 1 + a).spend;
+        const df = x.full * net - sa;
+        return `<tr data-a="${a}" class="${a === S.rs.age ? 'on' : ''}">${d.partners.map((p) =>
+            `<td>${Math.floor(x.ages[p.id])}</td>`).join('')}<td>${base0 + a}</td>${kinds.map((k) =>
+            `<td>${fmt(sum(x.parts.filter((p) => p.kind === k && p.started).map((p) => p.value)))}</td>`)
+            .join('')}<td>${fmt(x.total * net)}</td><td>${x.later > 0 ? `${fmt(x.full * net)} <span class="muted">(${
+            x.fullYear})</span>` : '–'}</td><td>${fmt(sa)}</td><td class="${df >= 0 ? 'pos' : 'neg'}">${
+            df >= 0 ? '+' : ''}${fmt(df)}</td></tr>`;
+      }).join('');
+  document.querySelectorAll<HTMLTableRowElement>('#rtable tr[data-a]').forEach((tr) => {
+    tr.addEventListener('click', () => {
+      app.S.rs.age = +tr.dataset.a!;
+      changed();
+    });
+  });
+}
