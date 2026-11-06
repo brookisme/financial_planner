@@ -128,6 +128,8 @@ const BODY = `
 <h3 id="h-faq">Questions</h3>
 <dl class="faq">
   <dt>Why is a box blue?</dt><dd>You changed it from its starting value.</dd>
+  <dt>Can I switch between light and dark?</dt><dd>Yes: <i>Auto / Light / Dark</i> next to
+    Settings. Auto follows your computer's setting. The choice is remembered in this browser.</dd>
   <dt>Where are my changes kept?</dt><dd>In <span class="mono">.financial_planner/state.json</span>
     inside the plan folder. Settings are in the YAML files.</dd>
   <dt>I changed the YAML by hand. Do I need to restart?</dt><dd>No, just reload the page.</dd>
