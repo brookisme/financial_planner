@@ -1,0 +1,9 @@
+# Categorization rules. Row rules ("this row is X") always win; otherwise the first match wins.
+# One condition per rule: row | equals | contains | matches (regex) | similar_to
+# field: description (default), category (the bank's), source, any CSV column, or "*" for any.
+# Optional filters: source, direction (debit|credit), min_amount, max_amount.
+# Easiest: use Settings > Categorize in the app and click a transaction.
+
+rules:
+  - {category: Paychecks, contains: PAYROLL, direction: credit}
+  - {category: Transfers & payments, matches: 'PAYMENT THANK YOU|AUTOPAY|ONLINE TRANSFER'}
