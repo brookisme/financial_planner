@@ -1,0 +1,34 @@
+# kind: spending (regular, averaged) | one_time (kept out of averages, optional toggle)
+#       credit (money in that can offset spending) | ignore (transfers, payments, paychecks)
+# kids_gone_pct / retired_pct: how the category changes once the kids leave / after retiring.
+
+categories:
+  - {name: Housing, group: Essentials}
+  - {name: Utilities, group: Essentials, kids_gone_pct: -15}
+  - {name: Groceries, group: Essentials, kids_gone_pct: -35}
+  - {name: Kids' school, group: Essentials, kids_gone_pct: -100}
+  - {name: Kids' activities, group: Essentials, kids_gone_pct: -100}
+  - {name: Health & Wellness, group: Essentials, kids_gone_pct: -15, retired_pct: 20}
+  - {name: Insurance, group: Essentials, retired_pct: -50}
+  - {name: Transportation, group: Essentials, kids_gone_pct: -15, retired_pct: -20}
+  - {name: Shopping & Household, group: Flexible, flexible: true, kids_gone_pct: -30}
+  - {name: Dining, group: Flexible, flexible: true, kids_gone_pct: -25}
+  - {name: Travel, group: Flexible, flexible: true, retired_pct: 25}
+  - {name: Entertainment, group: Flexible, flexible: true, kids_gone_pct: -20}
+  - {name: Subscriptions & Phone, group: Flexible, flexible: true}
+  - {name: Other, group: Unsorted}
+  - name: Income tax
+    kind: one_time
+    tax: true
+    default_on: true
+    label: Set aside for income tax
+  - name: Property tax
+    kind: one_time
+    tax: true
+    in_retirement: true
+    label: Set aside for property tax
+  - name: Other credits
+    kind: credit
+    label: Other reimbursements & credits
+  - {name: Paychecks, kind: ignore}
+  - {name: Transfers & payments, kind: ignore}
