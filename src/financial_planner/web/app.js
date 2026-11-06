@@ -1881,6 +1881,9 @@
 </table>
 <p class="note">Share codes contain your planner amounts and retirement inputs (not
   transactions). Anyone with a code can read those numbers.</p>
+<p>To give someone <b>everything</b> (settings, data, scenarios), use Settings \u203A <i>Share plan</i>
+  \u203A <i>Save plan as a file</i>. They open it from the Mac app's menu-bar icon \u203A <i>Open Plan
+  File\u2026</i>. That file contains your real transactions: share it privately.</p>
 
 <h3 id="h-planner">Monthly planner</h3>
 <ul>
@@ -2684,7 +2687,8 @@
     ["assumptions", "Assumptions"],
     ["sources", "Data sources"],
     ["categories", "Categories"],
-    ["categorize", "Categorize"]
+    ["categorize", "Categorize"],
+    ["share", "Share plan"]
   ];
   var KINDS2 = [
     ["spending", "Regular"],
@@ -2734,6 +2738,7 @@
       assumptions: renderAssumptions,
       sources: renderSources,
       categories: renderCategories,
+      share: renderShare2,
       categorize: (el) => renderCategorizeTab(el, () => {
         dirty = true;
       })
@@ -3398,6 +3403,41 @@
   function catNamesDatalist() {
     const cats = cfg.raw.categories ?? [];
     return `<datalist id="cat-names">${cats.map((c) => `<option value="${esc(c.name)}">`).join("")}</datalist>`;
+  }
+  function renderShare2(el) {
+    el.innerHTML = `<div class="panel form">
+      <h3>Send your whole plan</h3>
+      <p class="small">Saves everything in this plan as one <span class="mono">.zip</span> file:
+        settings, categories and rules, your CSV files, and (if ticked) your planner edits and
+        saved scenarios. Send it by AirDrop or Messages; the other person opens it in their
+        Financial Planner and sees exactly what you see.</p>
+      <label class="field check"><input type="checkbox" id="sh-state" checked>Include my planner
+        edits and saved scenarios</label>
+      <div class="btns"><a class="btn primary" id="sh-dl" href="/api/plan/export" download>Save plan
+        as a file</a></div>
+      <div class="banner"><b>This file contains your real transactions and finances.</b>
+        <span class="small">Share it only with people you trust, privately (AirDrop, Messages,
+        email to them). Don't post it or put it in a public folder.</span></div>
+    </div>
+    <div class="panel form">
+      <h3>Open a plan someone sent you</h3>
+      <ul class="small" style="margin:0;padding-left:1.2em;display:grid;gap:4px">
+        <li><b>Desktop app (Mac):</b> menu-bar icon \u203A <i>Open Plan File\u2026</i> and pick the
+          <span class="mono">.zip</span>. You can keep both plans or replace yours (yours is kept
+          as a backup folder). New users get the same choice on the first launch.</li>
+        <li><b>Command line:</b> <span class="mono">financial_plan import "Household Budget
+          2026-11-06.zip"</span></li>
+        <li><b>By hand:</b> double-click the <span class="mono">.zip</span> in Finder. The folder
+          it makes is a plan; open it with <i>Change Plan Folder\u2026</i>.</li>
+      </ul>
+      <p class="small muted">Only want to share a what-if? Use <i>Share</i> in the Scenarios bar
+        instead: it sends just the numbers, not your data.</p>
+    </div>`;
+    const box = el.querySelector("#sh-state");
+    const link = el.querySelector("#sh-dl");
+    box.addEventListener("change", () => {
+      link.href = box.checked ? "/api/plan/export" : "/api/plan/export?state=false";
+    });
   }
   function renderCategories(el) {
     const cats = section("categories", []);
