@@ -8,6 +8,7 @@ The ``financial_plan`` command:
 - ``validate [dir]``: check the config and CSVs and print a summary.
 - ``inspect-csv FILE``: show a CSV's columns and a suggested ``sources`` entry.
 - ``categorize [dir]``: print per-category averages; ``--unmatched`` lists rows no rule caught.
+- ``export [dir]`` / ``import FILE [dir]``: pack a whole plan into one .zip / unpack one.
 - ``launcher``: make a double-click launcher (macOS: ``Financial Planner.app`` in /Applications).
 
 License: BSD 3-Clause
@@ -28,6 +29,7 @@ from typing import Any, Optional
 from financial_planner.config import ConfigError, dump_yaml
 from financial_planner.launcher import (choose_plan_dir, create_shortcut, is_plan_dir,
                                         remember_plan)
+from financial_planner.share import ShareError, archive_name, export_plan, import_plan
 from financial_planner.sources import SourceError, inspect_csv
 from financial_planner.summary import category_report, load_plan, transaction_rows
 
@@ -61,7 +63,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 1
     try:
         return args.func(args)
-    except (ConfigError, SourceError) as err:
+    except (ConfigError, SourceError, ShareError) as err:
         print(f'error: {err}', file=sys.stderr)
         return 1
 
@@ -159,6 +161,21 @@ def _parser() -> argparse.ArgumentParser:
                    help='list transactions no rule matched (they fell to a default)')
     p.set_defaults(func=_cmd_categorize)
 
+    p = sub.add_parser('export', help='pack the whole plan into one .zip to share')
+    p.add_argument('plan_dir', nargs='?', default='.', help='plan folder (default: here)')
+    p.add_argument('-o', '--output', help='zip file to write (default: "<title> <date>.zip")')
+    p.add_argument('--no-state', action='store_true',
+                   help='leave out planner edits and saved scenarios')
+    p.set_defaults(func=_cmd_export)
+
+    p = sub.add_parser('import', help='unpack a shared plan .zip into a folder')
+    p.add_argument('file', help='the .zip file')
+    p.add_argument('plan_dir', nargs='?', help='folder to create (default: ~/FinancialPlan, or '
+                                               '"~/FinancialPlan 2" if that exists)')
+    p.add_argument('--replace', action='store_true',
+                   help='replace an existing plan there (it is kept as a backup folder)')
+    p.set_defaults(func=_cmd_import)
+
     p = sub.add_parser('launcher', help='create a double-click launcher (macOS: an app in '
                                         '/Applications)')
     p.add_argument('--plan-dir', help='plan to open (default: the last one used, or ask)')
@@ -248,6 +265,35 @@ def _cmd_categorize(args: argparse.Namespace) -> int:
         for r in rows:
             print(f'  {r["date"]}  {r["amount"]:10,.2f}  {r["source"]:16s} {r["description"]}')
     return 0
+
+
+def _cmd_export(args: argparse.Namespace) -> int:
+    """``export``: write the plan as one zip."""
+    plan_dir = Path(args.plan_dir)
+    title = load_plan_title(plan_dir)
+    out = Path(args.output) if args.output else Path(archive_name(title))
+    files = export_plan(plan_dir, out, include_state=not args.no_state, top=out.stem)
+    print(f'wrote {out} ({len(files)} files)\n  it contains your real financial data: share it '
+          'privately (AirDrop, Messages), not publicly')
+    return 0
+
+
+def _cmd_import(args: argparse.Namespace) -> int:
+    """``import``: unpack a shared plan."""
+    from financial_planner.launcher import DEFAULT_PLAN_DIR
+    from financial_planner.share import unique_path
+    dest = Path(args.plan_dir).expanduser() if args.plan_dir else (
+        DEFAULT_PLAN_DIR if args.replace else unique_path(DEFAULT_PLAN_DIR))
+    path = import_plan(Path(args.file), dest, replace=args.replace)
+    print(f'imported the plan into {path}\n  open it with "financial_plan start {path}"')
+    return 0
+
+
+def load_plan_title(plan_dir: Path) -> str:
+    """The plan's title from its config (or a generic one)."""
+    from financial_planner.config import load_config_raw
+    plan = load_config_raw(plan_dir).raw.get('plan') or {}
+    return str(plan.get('title') or 'Financial Plan')
 
 
 def _cmd_launcher(args: argparse.Namespace) -> int:
