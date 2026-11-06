@@ -1,0 +1,16 @@
+# The environment the desktop app installs on first launch (NOT the dev pyproject.toml).
+# It's copied to ~/Library/Application Support/FinancialPlanner/env/ and installed there.
+# "Check for Updates…" in the menu-bar icon runs `pixi update` on it.
+# make-local-app.sh can swap the git source for a local checkout (FP_SOURCE=/path).
+
+[workspace]
+name = "financial-planner-app"
+version = "0.1.0"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "osx-64"]
+
+[dependencies]
+python = ">=3.11,<3.14"
+
+[pypi-dependencies]
+financial-planner = { git = "https://github.com/brookisme/financial_planner.git", branch = "main", extras = ["desktop"] }
