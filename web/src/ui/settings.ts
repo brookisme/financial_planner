@@ -459,7 +459,8 @@ function renderAssumptions(el: HTMLElement): void {
                                                   'number');
   el.innerHTML = `<div class="panel form"><h3>Plan</h3><div class="fgrid">
       ${input('plan.title', 'Title', plan.title ?? 'Household Budget')}
-      ${input('plan.subtitle', 'Subtitle', plan.subtitle ?? '', 'text', '', 'data-optional')}
+      ${input('plan.subtitle', 'Subtitle', plan.subtitle ?? '', 'text',
+              'Empty: a line naming your data sources and months', 'data-optional')}
       ${input('plan.months', 'Months to average', plan.months ?? 12, 'number',
               'The most recent N months of transactions')}
       ${input('plan.last_month', 'Last month to average (YYYY-MM)', plan.last_month ?? '', 'text',
