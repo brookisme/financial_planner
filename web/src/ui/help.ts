@@ -63,6 +63,9 @@ const BODY = `
 </table>
 <p class="note">Share codes contain your planner amounts and retirement inputs (not
   transactions). Anyone with a code can read those numbers.</p>
+<p>To give someone <b>everything</b> (settings, data, scenarios), use Settings › <i>Share plan</i>
+  › <i>Save plan as a file</i>. They open it from the Mac app's menu-bar icon › <i>Open Plan
+  File…</i>. That file contains your real transactions: share it privately.</p>
 
 <h3 id="h-planner">Monthly planner</h3>
 <ul>
