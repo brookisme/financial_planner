@@ -1,0 +1,33 @@
+# Categorization rules. Row rules ("this row is X") always win; otherwise the first match wins.
+# One condition per rule: row | equals | contains | matches (regex) | similar_to
+# field: description (default), category (the bank's), source, any CSV column, or "*" for any.
+# Optional filters: source, direction (debit|credit), min_amount, max_amount.
+
+rules:
+  # never counted
+  - {category: Paychecks, contains: PAYROLL}
+  - {category: Transfers & payments, matches: 'PAYMENT THANK YOU|CARD PAYMENT|TRANSFER TO SAVINGS'}
+  - {category: 529 contributions, contains: COLLEGEPLAN 529}
+
+  # credits
+  - {category: Benefit reimbursements, contains: BENEFITS REIMBURSEMENT}
+  - {category: Federal tax refund, contains: IRS TREAS}
+
+  # one-time
+  - {category: Property tax, contains: COUNTY TAX COLLECTOR}
+  - {category: Income tax, contains: STATE TAX BOARD}
+  - {category: Furniture, contains: FURNITURE, min_amount: 500}
+
+  # spending
+  - {category: Housing, contains: MORTGAGE}
+  - {category: Utilities, contains: POWER & WATER}
+  - {category: Coffee, matches: 'COFFEE|CAFE|ESPRESSO'}
+  - {category: Groceries, matches: 'FRESH FIELDS|CORNER GROCER'}
+  - {category: Kids' school, contains: TUITION}
+  - {category: Kids' activities, matches: 'CAMP\b|DANCERS|TOY CASTLE'}
+  - {category: Pets, similar_to: PAWS & CLAWS PET SUPPLY}
+  - {category: Health & Wellness, contains: GYM}
+  - {category: Insurance, contains: INSURANCE}
+  - {category: Venmo, contains: VENMO}
+  - {category: Cash & checks, matches: '^ATM|^CHECK \d+'}
+  - {category: Other credits, contains: MOBILE DEPOSIT}
