@@ -1,0 +1,107 @@
+# Setting up a plan with an AI assistant
+
+These are instructions for an AI coding assistant (one that can read files and run commands) to set
+up a Financial Planner plan with a person. To use them, open a terminal in your plan folder, start
+your assistant, and say:
+
+> Read `<path to financial_planner>/LLM_SETUP.md` and help me set up my financial plan in this
+> folder.
+
+**Before you start:** the assistant will read your bank exports and what you tell it. Only use an
+assistant and account you trust with financial data, and review what it writes.
+
+---
+
+## Instructions for the assistant
+
+You are helping a person build a plan for the Financial Planner app. Follow these steps in order.
+Ask one small group of questions at a time, explain briefly why you're asking, accept "skip" or "I
+don't know" (use the defaults), and confirm before writing files.
+
+### 0. Privacy rules (always)
+
+- Use generic names in the config: "Partner A", "Partner B", "Child 1". If the person gives real
+  names, suggest generic ones and use those unless they insist.
+- Never write birthdates (ages only), account numbers, addresses, employer names or Social Security
+  numbers into the config. Generic labels like "Employer A pension" are fine.
+- Keep the plan folder outside any public repository. If the folder is inside a git repository,
+  warn the person and suggest adding `data/` and `.financial_planner/` to `.gitignore` (or not
+  committing the plan at all).
+- Don't upload, paste or send the person's data anywhere other than the files in the plan folder.
+- If CSV descriptions contain card or account numbers, point that out.
+
+### 1. Create the plan folder
+
+If `config/` doesn't exist in the working folder, run:
+
+```bash
+financial_plan init .
+```
+
+(or `pixi run financial_plan init .` / `python -m financial_planner init .`, whichever works). This
+writes `config/config.yaml`, `sources.yaml`, `categories.yaml` and `rules.yaml` with comments.
+Read the README's "Config reference" section in the financial_planner repository for every field.
+
+### 2. Household (`config/config.yaml` › `household`)
+
+Ask, for each adult (one or more):
+- age; take-home (net) pay per month and where it came from (pay stub, average of recent months);
+- expected yearly raise above inflation (default 0);
+- Social Security estimate at 67 (from their statement; a rough guess is fine) and when they plan
+  to claim (default: when retiring);
+- pensions: name, monthly estimates by retirement age if they have them (e.g. from a pension
+  estimate tool), years of service so far;
+- retirement accounts (401k, 403b, IRA): name, balance, monthly contribution.
+
+The first partner is the "primary": the retirement-age slider is their age. Ask what age they're
+thinking of retiring at (`assumptions.retirement.default_age`).
+
+For each child: age, 529 balance and monthly contribution, the kind of college to plan for
+(`public`, `flagship`, `private`, or custom schools under `assumptions.college.schools`), and the
+graduation month if they know it.
+
+### 3. Savings, investments, assumptions
+
+- Other monthly income; monthly transfers to savings (`savings`); brokerage / stock accounts
+  (`investments`: balance, a return % or 0 to leave it off, monthly additions).
+- Retirement assumptions: health insurance cost after retiring, tax rate in retirement (10-15% is a
+  common rough figure). Keep the default return / inflation unless they have a view.
+
+### 4. Data sources (`config/sources.yaml`)
+
+1. List the CSVs in `data/`. If there are none, ask the person to export 12 months of transactions
+   from each bank and card website as CSV and save them in `data/`.
+2. For each distinct export layout run `financial_plan inspect-csv data/<file>.csv --name "<label>"`.
+   It prints the columns, sample rows and a suggested source entry.
+3. Check the suggestion against the sample: the date column, the description column(s), and the
+   amount sign. Internally money out must be positive. For one signed column, set
+   `outflow: negative` if purchases are negative in the file, `positive` if purchases are positive.
+   For separate columns use `amount: {debit: <out column>, credit: <in column>}`.
+4. Use a glob in `files` (e.g. `data/visa*.csv`) so future exports are picked up.
+5. Run `financial_plan validate .` and fix any problems it reports.
+
+### 5. Categories and rules (`categories.yaml`, `rules.yaml`)
+
+1. Start from the starter categories. Ask whether to add or rename any (e.g. Coffee, Pets,
+   Childcare). Mark transfers, card payments, paychecks and savings/529 transfers as
+   `kind: ignore`; irregular big costs (property tax, a one-off purchase) as `kind: one_time`;
+   money coming in that offsets spending (reimbursements, refunds) as `kind: credit`.
+2. Run `financial_plan categorize . --unmatched` to see what no rule catches.
+3. Propose rules in small batches, grouped by merchant: prefer `contains` on a distinctive word,
+   `matches` for several merchants (`'COFFEE|CAFE'`), `similar_to` for merchants with changing
+   store numbers, `field: category` + `equals` to reuse the bank's own category, and filters
+   (`direction`, `min_amount`) when a word is ambiguous. Show the person the batch, then write it.
+   Put specific rules above general ones (first match wins).
+4. Ask about anything you can't tell (Venmo, checks, cash, ambiguous merchants). Don't guess
+   silently.
+5. Repeat until the unmatched list is short and the averages from `financial_plan categorize .`
+   look right to the person.
+
+### 6. Finish
+
+1. Run `financial_plan validate .` once more.
+2. Start the app with `financial_plan start .` and suggest they look at the planner strip, then
+   Settings › Categorize to fix any remaining rows by clicking them.
+3. Offer `financial_plan launcher` to put a double-click shortcut on their desktop.
+4. Remind them: the plan folder holds private data; keep it off the internet and out of public
+   repositories.
