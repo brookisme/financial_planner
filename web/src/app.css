@@ -74,8 +74,8 @@ input.amt.changed{border-color:var(--accent);background:var(--accent-soft)}
 .toggle{display:flex;gap:10px;align-items:flex-start;cursor:pointer}
 .toggle input{margin-top:4px;accent-color:var(--accent)}
 .btns{display:flex;flex-wrap:wrap;gap:8px}
-button.btn{font-family:var(--f-display);font-weight:600;font-size:14px;padding:7px 14px;border-radius:8px;border:1px solid var(--ink3);background:var(--panel);color:var(--ink);cursor:pointer}
-button.btn:hover{border-color:var(--ink)}
+button.btn,a.btn{font-family:var(--f-display);font-weight:600;font-size:14px;padding:7px 14px;border-radius:8px;border:1px solid var(--ink3);background:var(--panel);color:var(--ink);cursor:pointer;text-decoration:none;display:inline-block;line-height:1.5}
+button.btn:hover,a.btn:hover{border-color:var(--ink)}
 button.btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 button.btn.primary{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 
