@@ -8,7 +8,7 @@ The ``financial_plan`` command:
 - ``validate [dir]``: check the config and CSVs and print a summary.
 - ``inspect-csv FILE``: show a CSV's columns and a suggested ``sources`` entry.
 - ``categorize [dir]``: print per-category averages; ``--unmatched`` lists rows no rule caught.
-- ``launcher``: put a double-click "Financial Planner" shortcut on the desktop.
+- ``launcher``: make a double-click launcher (macOS: ``Financial Planner.app`` in ~/Applications).
 
 License: BSD 3-Clause
 """
@@ -16,9 +16,11 @@ License: BSD 3-Clause
 # Imports
 #
 import argparse
+import os
 import shutil
 import sys
 import threading
+import time
 import webbrowser
 from pathlib import Path
 from typing import Any, Optional
@@ -37,6 +39,7 @@ TEMPLATE_DIR: Path = PACKAGE_DIR / 'templates' / 'new_plan'
 DEMO_DIRS: tuple[Path, ...] = (PACKAGE_DIR / 'templates' / 'demo',
                               PACKAGE_DIR.parents[1] / 'examples' / 'demo')
 DEFAULT_PORT: int = 8765
+PARENT_CHECK_S: float = 2.0
 
 
 #
@@ -136,6 +139,7 @@ def _parser() -> argparse.ArgumentParser:
                                                'or ~/FinancialPlan)')
     p.add_argument('--port', type=int, default=DEFAULT_PORT, help='port (default: 8765)')
     p.add_argument('--no-browser', action='store_true', help="don't open a browser")
+    p.add_argument('--parent-pid', type=int, help=argparse.SUPPRESS)   # used by the desktop app
     p.set_defaults(func=_cmd_start)
 
     p = sub.add_parser('validate', help='check the config and CSVs')
@@ -155,9 +159,11 @@ def _parser() -> argparse.ArgumentParser:
                    help='list transactions no rule matched (they fell to a default)')
     p.set_defaults(func=_cmd_categorize)
 
-    p = sub.add_parser('launcher', help='create a desktop shortcut that starts the app')
-    p.add_argument('--plan-dir', help='always open this plan (default: the last one used)')
-    p.add_argument('--desktop', help='folder for the shortcut (default: ~/Desktop)')
+    p = sub.add_parser('launcher', help='create a double-click launcher (macOS: an app in '
+                                        '~/Applications)')
+    p.add_argument('--plan-dir', help='plan to open (default: the last one used, or ask)')
+    p.add_argument('--desktop', help='folder for the launcher (default: ~/Applications on macOS, '
+                                     '~/Desktop elsewhere)')
     p.set_defaults(func=_cmd_launcher)
     return parser
 
@@ -186,8 +192,20 @@ def _cmd_start(args: argparse.Namespace) -> int:
     print(f'Financial Planner: {plan_dir}\n  open {url}  (Ctrl+C to stop)')
     if not args.no_browser:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    if args.parent_pid:
+        threading.Thread(target=_exit_with_parent, args=(args.parent_pid,), daemon=True).start()
     uvicorn.run(create_app(plan_dir), host='127.0.0.1', port=args.port, log_level='warning')
     return 0
+
+
+def _exit_with_parent(pid: int, interval: float = PARENT_CHECK_S) -> None:
+    """Stop this process once the desktop app that started it is gone."""
+    while True:
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            os._exit(0)
+        time.sleep(interval)
 
 
 def _cmd_validate(args: argparse.Namespace) -> int:
@@ -236,7 +254,9 @@ def _cmd_launcher(args: argparse.Namespace) -> int:
     """``launcher``: write a desktop shortcut."""
     path = create_shortcut(Path(args.desktop) if args.desktop else None,
                            Path(args.plan_dir) if args.plan_dir else None)
-    print(f'created {path}\n  double-click it to start the Financial Planner')
+    hint = ('open it from Applications or Spotlight; it adds a menu-bar icon'
+            if path.suffix == '.app' else 'double-click it to start the Financial Planner')
+    print(f'created {path}\n  {hint}')
     return 0
 
 
