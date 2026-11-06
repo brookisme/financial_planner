@@ -54,7 +54,8 @@ def normalize_merchant(text: str) -> str:
     """Reduce a description to a comparable merchant name.
 
     Drops processor prefixes, store numbers, reference codes and punctuation, e.g.
-    ``"SQ *TACO TRUCK 456"`` -> ``"TACO TRUCK"`` and ``"MEGAMART.COM*AB12CD"`` -> ``"MEGAMART COM"``.
+    ``"SQ *TACO TRUCK 456"`` -> ``"TACO TRUCK"`` and
+    ``"MEGAMART.COM*AB12CD"`` -> ``"MEGAMART COM"``.
 
     Args:
         text: A description.
