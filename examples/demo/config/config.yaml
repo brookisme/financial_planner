@@ -1,0 +1,82 @@
+# Demo plan: an entirely fictional household. Copy this folder to start your own plan, or run
+# `financial_plan init my_plan` for a blank one.
+
+plan:
+  title: Household Budget
+  subtitle: A fictional two-partner household with two kids, built from a demo card and checking account.
+  months: 12          # average over the last 12 months of transactions
+  # today: 2026-01    # the plan's "now"; defaults to the month after the last transaction
+
+household:
+  partners:
+    - id: alex
+      name: Alex
+      age: 46
+      take_home_monthly: 7220.84
+      take_home_note: two paychecks a month
+      raise_pct: 0
+      social_security:
+        at_67: 3100
+      pensions:
+        - name: Robotics pension
+          estimates: {55: 800, 60: 1900, 65: 3400}
+          service_years_now: 9
+      accounts:
+        - name: Old 401(k)
+          balance: 148000
+          monthly: 0
+    - id: jordan
+      name: Jordan
+      age: 44
+      take_home_monthly: 4120
+      take_home_note: clinic paycheck
+      social_security:
+        at_67: 2400
+        claim_age: 67
+      accounts:
+        - name: 403(b)
+          balance: 61000
+          monthly: 600
+  children:
+    - id: riley
+      name: Riley
+      age: 12
+      college_529: {balance: 38500, monthly: 500}
+      school: flagship
+    - id: casey
+      name: Casey
+      age: 7
+      college_529: {balance: 12400, monthly: 500}
+      school: flagship
+
+other_income_monthly: 0
+
+savings:
+  - id: emergency
+    name: Emergency savings
+    monthly: 500
+
+investments:
+  - id: brokerage
+    name: Brokerage
+    balance: 22000
+    return_pct: 0      # 0 = off until you pick a rate
+    monthly: 0
+
+assumptions:
+  retirement:
+    return_pct: 5.5
+    inflation_pct: 3
+    withdrawal_pct: 4
+    tax_pct: 12
+    health_insurance_monthly: 1100
+    default_age: 63
+  college:
+    schools:
+      public: {name: Public in-state, cost: 30000}
+      flagship: {name: Flagship in-state, cost: 42000}
+      private: {name: Private, cost: 68000}
+    default_preset: mid
+
+default_category: Other
+default_credit_category: Other credits
