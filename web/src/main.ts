@@ -7,6 +7,7 @@
 
 import {$, app, load} from './app';
 import {esc, setCurrency} from './format';
+import {describeData} from './model';
 import {buildCollege} from './ui/college';
 import {buildExplorer} from './ui/explorer';
 import {buildFuture} from './ui/future';
@@ -72,7 +73,7 @@ async function start(): Promise<void> {
   setCurrency(p.plan.currency_symbol);
   document.title = p.plan.title;
   $('title').textContent = p.plan.title;
-  $('subtitle').textContent = p.plan.subtitle;
+  $('subtitle').textContent = p.plan.subtitle || describeData(p);
   const months = p.month_labels;
   $('eyebrow').textContent = months.length ?
       `${p.plan.title} · ${months[0]} – ${months[months.length - 1]} data` : p.plan.title;
