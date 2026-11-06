@@ -99,3 +99,16 @@ def test_invalid_save_never_reaches_disk(plan_dir: Path) -> None:
 def test_slugify() -> None:
     assert slugify('Partner A') == 'partner-a'
     assert slugify('  !!  ') == 'item'
+
+
+def test_save_keeps_numeric_keys_flow_style_and_list_comments(plan_dir: Path) -> None:
+    (plan_dir / 'config' / 'config.yaml').write_text(
+        'household:\n  partners:\n    # the first partner\n'
+        '    - {name: A, age: 50, pensions: [{name: P, estimates: {55: 900}}]}\n')
+    loaded = load_config(plan_dir)
+    partners = loaded.raw['household']['partners']
+    partners[0]['pensions'][0]['estimates'] = {'55': 900, '60': 2000}
+    partners.append({'name': 'B', 'age': 40})
+    text = save_section(plan_dir, 'household', {'partners': partners}).read_text()
+    assert '# the first partner' in text and "'55'" not in text and '60: 2000' in text
+    assert load_config(plan_dir).config.household.partners[1].name == 'B'
