@@ -8,14 +8,15 @@ License: BSD 3-Clause
 #
 # Imports
 #
+import plistlib
 from pathlib import Path
 
 import pytest
 
 from financial_planner.cli import init_plan, main, suggest_source
 from financial_planner.config import ConfigError, load_config
-from financial_planner.launcher import (choose_plan_dir, create_shortcut, remember_plan,
-                                        remembered_plan)
+from financial_planner.launcher import (choose_plan_dir, create_mac_app, create_shortcut,
+                                        remember_plan, remembered_plan)
 from financial_planner.sources import inspect_csv
 from financial_planner.state import read_state, write_state_key
 
@@ -73,14 +74,24 @@ def test_choose_plan_dir_order(tmp_path: Path, plan_dir: Path) -> None:
     assert choose_plan_dir(str(tmp_path / 'new'), settings_file=settings)[1] is True
 
 
-@pytest.mark.parametrize('platform, name', [('darwin', 'Financial Planner.command'),
-                                            ('linux', 'financial-planner.desktop'),
+@pytest.mark.parametrize('platform, name', [('linux', 'financial-planner.desktop'),
                                             ('win32', 'Financial Planner.bat')])
 def test_create_shortcut(tmp_path: Path, platform: str, name: str) -> None:
     path = create_shortcut(tmp_path, tmp_path / 'plan', platform=platform)
     assert path.name == name
     text = path.read_text()
     assert 'financial_planner start' in text and str(tmp_path / 'plan') in text
+
+
+def test_create_mac_app(tmp_path: Path) -> None:
+    app = create_mac_app(tmp_path, python='/opt/py/bin/python')
+    assert app.name == 'Financial Planner.app'
+    info = plistlib.loads((app / 'Contents' / 'Info.plist').read_bytes())
+    assert info['CFBundleExecutable'] == 'launch' and info['CFBundleIconFile'] == 'AppIcon'
+    launch = app / 'Contents' / 'MacOS' / 'launch'
+    assert 'financial_planner.desktop' in launch.read_text() and launch.stat().st_mode & 0o111
+    assert (app / 'Contents' / 'Resources' / 'AppIcon.icns').exists()
+    assert create_mac_app(tmp_path).exists()      # rebuilding replaces the old bundle
 
 
 def test_state_round_trip(tmp_path: Path) -> None:
