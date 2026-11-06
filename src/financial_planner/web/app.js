@@ -3070,11 +3070,19 @@
       "The most recent N months of transactions"
     )}
       ${input(
+      "plan.last_month",
+      "Last month to average (YYYY-MM)",
+      plan.last_month ?? "",
+      "text",
+      "Empty: the month of the newest transaction",
+      "data-optional"
+    )}
+      ${input(
       "plan.today",
       "Today (YYYY-MM)",
       plan.today ?? "",
       "text",
-      "Empty: the month after the last transaction",
+      "Empty: the month after the averaging window",
       "data-optional"
     )}
       ${input("plan.currency_symbol", "Currency symbol", plan.currency_symbol ?? "$")}</div>
