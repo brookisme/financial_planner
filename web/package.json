@@ -1,0 +1,19 @@
+{
+  "name": "financial-planner-web",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Frontend for the Financial Planner (built into src/financial_planner/web).",
+  "license": "BSD-3-Clause",
+  "type": "module",
+  "scripts": {
+    "build": "npm run check && node build.mjs",
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "watch": "node build.mjs --watch"
+  },
+  "devDependencies": {
+    "esbuild": "0.24.2",
+    "typescript": "5.7.3",
+    "vitest": "2.1.9"
+  }
+}
