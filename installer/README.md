@@ -35,7 +35,7 @@ installer/
   shared/bootstrap.sh             ensure pixi → ensure env → run the menu-bar app
   macos/app/Financial Planner.app template bundle (Info.plist + launch script)
   macos/assemble-app.sh           the one place that puts a bundle together
-  macos/make-local-app.sh         build into ~/Applications for this Mac
+  macos/make-local-app.sh         build into /Applications for this Mac
   macos/make-dist.sh              build unsigned zips (Apple Silicon + Intel) for a release
   icon/financial-planner.svg      app icon source
   icon/tray.svg                   menu-bar icon source
@@ -51,11 +51,11 @@ bash installer/macos/make-local-app.sh                # installs the GitHub vers
 FP_SOURCE=. bash installer/macos/make-local-app.sh    # installs this checkout instead
 ```
 
-The app lands in `~/Applications` (pass another folder as an argument). It's ad-hoc signed, so
-it runs on the Mac that built it.
+The app lands in `/Applications` (or `~/Applications` if that isn't writable; pass another folder
+as an argument). It's ad-hoc signed, so it runs on the Mac that built it.
 
 People who already have the code can also run `pixi run financial_plan launcher`, which writes a
-small `Financial Planner.app` into `~/Applications` that uses the current environment (no
+small `Financial Planner.app` into `/Applications` that uses the current environment (no
 separate install).
 
 ## Build downloads for a release
