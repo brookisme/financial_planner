@@ -1,13 +1,14 @@
+<sub>🤖 <b>Built with Claude.</b> This project was developed heavily with <a href="https://www.anthropic.com/claude">Claude</a> (Anthropic's AI assistant) using Claude Code.</sub>
+
 # Financial Planner
 
 A private, local household budget and long-term planner. Point it at the CSV exports from your bank
 and credit cards, describe your household (in the app or in YAML), and explore your monthly budget,
 college savings, retirement and how spending changes over time.
 
-> **Built with Claude.** This project was developed heavily with
-> [Claude](https://www.anthropic.com/claude) (Anthropic's AI assistant) using Claude Code.
-
 **Full documentation: [the wiki](https://github.com/brookisme/financial_planner/wiki).**
+
+<p align="center"><img src="assets/app-overview.png" height="350" alt="The Financial Planner app, showing the monthly planner and the retirement section with fictional demo data"></p>
 
 ## Contents
 
