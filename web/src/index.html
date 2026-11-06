@@ -1,0 +1,230 @@
+<!doctype html>
+<!--
+  Financial Planner page. Built by web/build.mjs into src/financial_planner/web/.
+  License: BSD 3-Clause
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Financial Planner</title>
+<style>html{background:#f3f5f4}@media (prefers-color-scheme: dark){html{background:#121715}}</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" media="print" onload="this.media='all'" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="top">
+      <span class="eyebrow" id="eyebrow">Financial Planner</span>
+      <a class="gear" href="#settings" id="gear" aria-label="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Settings</a>
+    </div>
+    <h1 id="title">Household Budget</h1>
+    <p class="muted" id="subtitle"></p>
+    <nav class="tabs" aria-label="Sections">
+      <a href="#planner">Monthly planner</a><a href="#explore">Explore spending</a><a href="#college" id="nav-college">College 529s</a><a href="#retire">Retirement</a><a href="#future">Spending over time</a><a href="#help" class="help-link">Help</a>
+    </nav>
+  </header>
+
+  <div id="banners"></div>
+
+  <div id="app-main" class="app-main">
+
+  <section class="panel sbar" id="scenarios" aria-label="Scenarios">
+    <div class="sb-row"><span class="eyebrow">Scenarios</span><div class="chips" id="sb-tabs" role="group" aria-label="Saved scenarios"></div></div>
+    <div class="sb-row">
+      <input type="text" id="sb-name" class="sb-name" placeholder="Name current settings, e.g. Retire at 67" aria-label="Scenario name" maxlength="60">
+      <button class="btn primary" id="sb-save" type="button">Save as new</button>
+      <button class="btn" id="sb-update" type="button" hidden>Update</button>
+      <button class="btn" id="sb-del" type="button" hidden>Delete</button>
+      <button class="btn" id="sb-reset" type="button">Reset everything</button>
+      <div class="sb-toggles" role="group" aria-label="Open a panel">
+        <button class="btn toggle" id="sb-cmp" type="button" aria-expanded="false" aria-controls="sb-compare">Compare</button>
+        <button class="btn toggle" id="sb-share-btn" type="button" aria-expanded="false" aria-controls="sb-share">Share</button>
+      </div>
+    </div>
+    <p class="small muted" id="sb-state" aria-live="polite"></p>
+    <div id="sb-compare" hidden class="sb-panel">
+      <div class="sb-panel-head"><h3>Compare scenarios</h3><button class="btn" type="button" data-close="sb-cmp">Close</button></div>
+      <div class="filters"><label for="cmp-a" class="small muted">Compare</label><select id="cmp-a"></select><label for="cmp-b" class="small muted">with</label><select id="cmp-b"></select></div>
+      <p class="small muted cmp-note" id="cmp-note"></p>
+      <div class="cmp-cards" id="cmp-cards"></div>
+      <div class="cmp-dets" id="cmp-dets"></div>
+    </div>
+    <div id="sb-share" hidden class="sb-panel share">
+      <div class="sb-panel-head" style="grid-column:1/-1"><h3>Share a scenario</h3><button class="btn" type="button" data-close="sb-share-btn">Close</button></div>
+      <div class="share-col">
+        <h3>Send</h3>
+        <p class="small muted">Sends <span id="sh-what"></span>. Paste the code into a text or email, or attach the file.</p>
+        <textarea id="sh-code" class="sh-box" rows="3" readonly aria-label="Share code"></textarea>
+        <div class="btns"><button class="btn primary" id="sh-copy" type="button">Copy share code</button><button class="btn" id="sh-file" type="button">Save as file</button></div>
+      </div>
+      <div class="share-col">
+        <h3>Receive</h3>
+        <p class="small muted">Paste a code, or open a scenario file. A scenario you already have is updated if the incoming one is newer.</p>
+        <textarea id="sh-paste" class="sh-box" rows="3" placeholder="FP1:…" aria-label="Paste a share code"></textarea>
+        <div class="btns"><button class="btn primary" id="sh-add" type="button">Add scenario</button><label class="btn" for="sh-open" style="cursor:pointer">Open file…<input type="file" id="sh-open" accept=".json,application/json" multiple hidden></label></div>
+      </div>
+      <div class="share-col" style="grid-column:1/-1">
+        <p class="small muted" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">Backup: <button class="btn" id="sh-all" type="button">Save all scenarios to a file</button> Open that file above to restore it.</p>
+        <p class="small" id="sh-msg" aria-live="polite"></p>
+      </div>
+    </div>
+  </section>
+
+  <div class="strip" aria-live="polite">
+    <div><span class="eyebrow">Take-home income</span><span class="v" id="s-inc"></span><span class="small muted" id="s-inc-note"></span></div>
+    <div><span class="eyebrow">Spending</span><span class="v" id="s-sp"></span><span class="small muted" id="s-sp-note">regular categories</span></div>
+    <div><span class="eyebrow">Savings</span><span class="v" id="s-sv"></span><span class="small muted" id="s-sv-note"></span></div>
+    <div><span class="eyebrow">Tax set-aside</span><span class="v" id="s-tx"></span><span class="small muted" id="s-tx-note"></span></div>
+    <div class="result"><span class="eyebrow">Left over each month</span><span class="v" id="s-left"></span><span class="small muted" id="s-left-yr"></span></div>
+  </div>
+
+  <section id="planner">
+    <div class="sec-head">
+      <h2>Monthly planner</h2>
+      <span class="small muted" id="planner-sub">Starts at each category's average. Type a new number to try a change.</span>
+    </div>
+    <div class="planner">
+      <div class="panel ptable-scroll">
+        <table class="ptable">
+          <thead><tr><th>Category</th><th id="avg-head">Avg</th><th>Low – high month</th><th>Planned / mo</th><th>Change</th></tr></thead>
+          <tbody id="ptbody"></tbody>
+        </table>
+      </div>
+      <div class="side">
+        <div class="panel"><h3>Income (take-home)</h3><div id="inc-rows" style="display:grid;gap:10px"></div></div>
+        <div class="panel"><h3>Savings</h3><div id="sav-rows" style="display:grid;gap:10px"></div><p class="small muted" id="sav-note"></p></div>
+        <div class="panel" id="ot-panel"><h3>Yearly and one-time costs</h3><div id="ot-rows" style="display:grid;gap:10px"></div></div>
+        <div class="btns"><button class="btn" id="reset" type="button">Reset to averages</button><button class="btn" id="trim" type="button">Try 10% less on flexible spending</button></div>
+        <p class="small muted" id="trim-note"></p>
+      </div>
+    </div>
+  </section>
+
+  <section id="explore">
+    <div class="sec-head">
+      <h2>Explore spending</h2>
+      <span class="small muted">Pick a category to highlight it month by month and see where the money went.</span>
+    </div>
+    <div class="seg" id="xmode" role="group" aria-label="Show"><button type="button" data-v="spend">Spending</button><button type="button" data-v="cred">Credits</button><button type="button" data-v="both">Both</button></div>
+    <div class="chips" id="chips" role="group" aria-label="Categories"></div>
+    <div class="panel" style="display:grid;gap:10px">
+      <div class="sec-head"><h3 id="chart-title">All spending by month</h3><span class="legend" id="legend"></span></div>
+      <svg class="chart" id="mchart" viewBox="0 0 960 300" role="img" aria-label="Monthly spending bar chart"></svg>
+      <p class="small muted">Click a month to filter the transactions below. Click it again to show all months.</p>
+    </div>
+    <div class="detail">
+      <div class="panel" style="display:grid;gap:14px">
+        <div class="kpis" id="kpis"></div>
+        <div><h3 style="margin-bottom:6px">Top merchants</h3><table class="list" id="merchants"></table></div>
+      </div>
+      <div class="panel" id="tx-panel" style="display:grid;gap:10px;align-content:start">
+        <div class="sec-head"><h3>Transactions</h3><span style="display:inline-flex;gap:10px;align-items:center"><span class="small muted" id="tx-count"></span><button class="btn toggle sm" id="recat" type="button" aria-expanded="false">Recategorize</button></span></div>
+        <p class="recat-note" id="recat-note" hidden>Click a transaction to change its category or make a rule from it. Click <i>Recategorize</i> again when you're done.</p>
+        <div class="filters">
+          <input type="search" id="q" placeholder="Search merchant" aria-label="Search transactions">
+          <select id="mfilter" aria-label="Month"></select>
+          <select id="sort" aria-label="Sort"><option value="amt">Largest first</option><option value="date">Newest first</option></select>
+        </div>
+        <div class="scroller"><table class="list" id="txlist"></table></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="college">
+    <div class="sec-head">
+      <h2>College 529s</h2>
+      <span class="small muted">Rough projections. Full cost of attendance for the whole degree, no financial aid.</span>
+    </div>
+    <div class="kids" id="kids"></div>
+    <p class="note">Contributions stop at high school graduation. The comparison uses the balance on graduation day, so it ignores growth while the money is spent down. "Today's dollars" converts the gap back at the college-cost inflation rate you pick.</p>
+  </section>
+
+  <section id="retire">
+    <div class="sec-head">
+      <h2>Retirement</h2>
+      <span class="small muted" id="retire-sub">Monthly income at each retirement age, in today's dollars.</span>
+    </div>
+    <div class="retire">
+      <div class="panel" style="display:grid;gap:16px">
+        <div class="ctl">
+          <div class="agehead"><span class="eyebrow" id="ra-who">Retires at</span><span class="big num" id="ra-v"></span><span class="muted" id="ra-when"></span></div>
+          <span></span>
+          <input type="range" id="ra" min="50" max="75" step="1" aria-label="Retirement age">
+        </div>
+        <div class="parts" id="r-parts"></div>
+        <div style="display:grid;gap:8px">
+          <div class="legend" id="r-legend"></div>
+          <svg class="chart" id="rchart" viewBox="0 0 960 300" role="img" aria-label="Monthly retirement income by retirement age"></svg>
+          <p class="small muted">Everything here is in today's dollars, so amounts compare directly. Bars are income after the retirement tax rate set under Spending over time. Click a bar or a table row to pick that age.</p>
+        </div>
+        <div class="ptable-scroll"><table class="rtable" id="rtable"></table></div>
+      </div>
+      <div class="side">
+        <div id="r-panels" style="display:grid;gap:14px"></div>
+        <div class="panel">
+          <h3>Assumptions</h3>
+          <div id="r-raises" style="display:grid;gap:10px"></div>
+          <p class="small muted">0% means pay just keeps up with inflation. Raises grow take-home pay each year until retirement and scale up pensions based on final pay.</p>
+          <fieldset class="scen"><legend class="eyebrow">Return &amp; inflation</legend>
+            <div class="scen-opts" id="r-scen"></div>
+            <div class="ctl"><label for="r-ret">Investment return</label><span class="num" id="r-ret-v"></span><input type="range" id="r-ret" min="2" max="10" step="0.5"></div>
+            <div class="ctl"><label for="r-inf">Inflation</label><span class="num" id="r-inf-v"></span><input type="range" id="r-inf" min="1" max="6" step="0.25"></div>
+            <span class="small muted">Tick a preset to set both sliders, then fine-tune.</span>
+          </fieldset>
+          <div class="ctl"><label for="r-wd">Yearly withdrawal from savings</label><span class="num" id="r-wd-v"></span><input type="range" id="r-wd" min="3" max="6" step="0.25"></div>
+          <button class="btn" id="r-reset" type="button">Reset retirement inputs</button>
+        </div>
+      </div>
+    </div>
+    <p class="note">Account balances are grown at the return rate, converted to today's dollars at the inflation rate, then turned into monthly income with the withdrawal rate (4% a year is a common rule of thumb). Pension estimates are treated as today's dollars. Income is compared with projected retirement spending from Spending over time below.</p>
+  </section>
+
+  <section id="future">
+    <div class="sec-head">
+      <h2>Spending over time</h2>
+      <span class="small muted">How spending changes as children leave home and you retire, against income each year.</span>
+    </div>
+    <div class="panel" style="display:grid;gap:10px">
+      <div class="sec-head"><h3 id="f-title">Monthly money in and out, by year</h3>
+        <div class="seg" id="f-view"><button type="button" data-v="real">Today's dollars</button><button type="button" data-v="nom">With inflation</button></div></div>
+      <div class="legend"><span><i class="sw" style="background:var(--accent)"></i>Spending (incl. taxes, health insurance)</span><span><i class="sw" style="background:var(--save)"></i>Savings and investing</span><span><i class="sw" style="background:var(--ink);height:3px;border-radius:0"></i>Take-home income</span></div>
+      <svg class="chart" id="fchart" viewBox="0 0 960 320" role="img" aria-label="Spending, savings and income by year"></svg>
+      <p class="small muted" id="f-cap"></p>
+    </div>
+    <div class="panel ptable-scroll"><table class="rtable" id="f-phases"></table></div>
+    <div class="retire">
+      <div class="panel ptable-scroll">
+        <h3 style="margin-bottom:6px">Category changes</h3>
+        <p class="small muted" style="margin-bottom:8px">Starting guesses you can edit. "Kids gone" is the change once all children are out (part of it applies while some are still home). "Retired" applies on top of that after you retire.</p>
+        <table class="ptable"><thead><tr><th>Category</th><th>Today</th><th>Kids gone</th><th>Retired</th><th>In retirement</th></tr></thead><tbody id="f-cats"></tbody></table>
+      </div>
+      <div class="side">
+        <div class="panel">
+          <h3>Retirement costs</h3>
+          <div class="row"><label for="f-health">Health insurance after retiring <span class="small muted">per month</span></label><input class="amt" id="f-health" type="number" step="50" inputmode="decimal"></div>
+          <div class="row"><label for="f-tax">Income tax rate in retirement</label><span style="display:inline-flex;align-items:center;gap:4px"><input class="amt" id="f-tax" type="number" step="1" inputmode="decimal" style="width:70px">%</span></div>
+          <p class="small muted">Pensions, account withdrawals and most Social Security are taxed. 10–15% overall is a common rough rate.</p>
+        </div>
+        <div class="panel">
+          <h3>What's built in</h3>
+          <p class="small" id="f-built"></p>
+          <button class="btn" id="f-reset" type="button">Reset these guesses</button>
+        </div>
+      </div>
+    </div>
+  </section>
+  </div>
+
+  <section id="settings" class="settings" hidden aria-labelledby="settings-title"></section>
+  <section id="help" class="help" hidden aria-labelledby="help-title"></section>
+</div>
+<dialog class="dlg" id="dlg"></dialog>
+<div id="tip" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
