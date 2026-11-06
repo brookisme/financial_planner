@@ -7,7 +7,8 @@
 
 import {describe, expect, it} from 'vitest';
 
-import {ageWhen, budget, clone, compact, creditsMo, Data, defaults, diffSettings, expand, flatten,
+import {ageWhen, budget, clone, compact, creditsMo, Data, defaults, describeData, diffSettings,
+        expand, flatten,
         fv, incomeAt, interpolatePension, kidCalc, rebase, results, retireYear,
         retirementIncome, spendAt, ssFactor, taxMo} from '../src/model';
 import type {Category, Payload, Settings} from '../src/types';
@@ -318,5 +319,19 @@ describe('scenarios', () => {
                            'Retirement']);
     expect(rows.find((r) => r[0] === 'Older: share of college covered')![1])
         .toBe(Math.round(kidCalc(d, s, 0).pct * 100));
+  });
+});
+
+describe('data description', () => {
+  it('names the sources in use, the transaction count, the months and pay notes', () => {
+    const p = payload();
+    p.sources = ['Visa card', 'Checking', 'Old card'];
+    p.tx = [['2026-09-01', 'A', 1, 0, 0, 'x'], ['2026-10-01', 'B', 2, 0, 1, 'y']];
+    p.household.partners[0].take_home_note = 'pay stub';
+    expect(describeData(p)).toBe('Built from Visa card and Checking (2 transactions, Sep 26 – ' +
+        'Oct 26). Take-home pay: Partner A (pay stub). Change any number in the planner to see ' +
+        'what it does to the month.');
+    p.tx = [];
+    expect(describeData(p)).toMatch(/^No transactions yet/);
   });
 });
