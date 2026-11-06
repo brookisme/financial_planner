@@ -40,7 +40,9 @@ financial_plan init .
 
 (or `pixi run financial_plan init .` / `python -m financial_planner init .`, whichever works). This
 writes `config/config.yaml`, `sources.yaml`, `categories.yaml` and `rules.yaml` with comments.
-Read the README's "Config reference" section in the financial_planner repository for every field.
+Every field is documented in the wiki's Config Reference
+(https://github.com/brookisme/financial_planner/wiki/Config-Reference); the other wiki pages
+(Data Sources, Categories, Categorizing and Rules) explain each part in detail.
 
 ### 2. Household (`config/config.yaml` › `household`)
 
