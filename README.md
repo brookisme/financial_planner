@@ -27,7 +27,7 @@ college savings, retirement and how spending changes over time.
 - **College 529s**: a projection for each child against the cost of college.
 - **Retirement**: income at each retirement age from pensions, accounts, investments and Social Security.
 - **Spending over time**: how costs change as children leave home and after retiring.
-- **Scenarios**: save, compare and share what-ifs.
+- **Scenarios**: save, compare and share what-ifs, or share the whole plan as one file.
 - **Settings and categorizing in the app**: no YAML editing required (but it's there if you want it).
 
 ## Privacy first
@@ -72,6 +72,7 @@ Want an AI assistant to set it up with you? See [LLM_SETUP.md](LLM_SETUP.md).
 | `financial_plan start [dir]` | Open the app. |
 | `financial_plan validate [dir]` | Check the config and CSVs. |
 | `financial_plan inspect-csv FILE` | Show a CSV's columns and a suggested source entry. |
+| `financial_plan export [dir]` / `import FILE` | Share a whole plan (config + data) as one .zip. |
 | `financial_plan categorize [dir] [--unmatched]` | Category averages; rows no rule caught. |
 | `financial_plan launcher` | Mac: add Financial Planner.app to /Applications. Elsewhere: a desktop shortcut. |
 
