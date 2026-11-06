@@ -12,13 +12,50 @@ college savings, retirement and how spending changes over time.
 
 ## Contents
 
+- [Install the Mac app (no code)](#install-the-mac-app-no-code)
 - [Features](#features)
 - [Privacy first](#privacy-first)
-- [Quick start](#quick-start)
+- [Quick start (terminal)](#quick-start-terminal)
 - [Your own plan](#your-own-plan)
 - [Commands](#commands)
 - [Development](#development)
 - [License](#license)
+
+## Install the Mac app (no code)
+
+<img src="https://raw.githubusercontent.com/brookisme/financial_planner/main/src/financial_planner/assets/app_icon.png" width="88" align="right" alt="Financial Planner app icon">
+
+1. Download the app from the [Releases page](https://github.com/brookisme/financial_planner/releases):
+   `FinancialPlanner-macos-arm64.zip` for Apple Silicon (M1 and later) or `-x86_64.zip` for Intel.
+2. Unzip it and drag **Financial Planner** into **Applications**.
+3. The first time, **right-click** the app › **Open** › **Open** (it isn't signed by Apple yet).
+4. The first launch sets itself up (a few minutes, needs the internet), then asks how to start:
+   a new plan, a plan someone shared with you, a folder you already have, or the demo.
+
+The planner opens in your browser.
+
+**The menu-bar icon** <img src="https://raw.githubusercontent.com/brookisme/financial_planner/main/src/financial_planner/assets/tray.png" height="16" alt="menu-bar icon">
+appears at the top right of your screen while the app runs. Click it for:
+
+| Item | What it does |
+|---|---|
+| Open Financial Planner | Opens the planner in your browser |
+| Change Plan Folder… / New Plan… | Switch to another plan, or start a new one |
+| Show Plan Folder | Opens the plan folder in Finder (e.g. to add CSV files) |
+| Open Plan File… / Save Plan as File… | Open a plan someone sent you / send yours |
+| Check for Updates… | Gets the latest version |
+| Quit Financial Planner | Stops it |
+
+Closing the browser tab leaves it running in the menu bar; opening the app again reuses it.
+**Quit** stops it.
+
+**Sharing your plan** (e.g. with your partner): menu-bar icon › **Save Plan as File…** (or
+Settings › Share plan) makes one `.zip` with your settings, CSV data and scenarios. They open it
+with menu-bar icon › **Open Plan File…**, or choose "Open a plan someone shared with me" on their
+first launch. The file holds your real transactions, so share it privately (AirDrop, Messages).
+To send just a what-if, use **Share** in the Scenarios bar instead.
+
+More: [Desktop App](https://github.com/brookisme/financial_planner/wiki/Desktop-App) on the wiki.
 
 ## Features
 
@@ -36,9 +73,9 @@ Everything runs on your computer and nothing is uploaded. Your plan folder holds
 data: **keep it out of public repositories and off the internet**, and use generic names (Partner A,
 Child 1). See [Privacy and Safety](https://github.com/brookisme/financial_planner/wiki/Privacy-and-Safety).
 
-## Quick start
+## Quick start (terminal)
 
-Install [pixi](https://pixi.sh), then:
+For people comfortable with a terminal (any OS). Install [pixi](https://pixi.sh), then:
 
 ```bash
 git clone https://github.com/brookisme/financial_planner.git
