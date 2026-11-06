@@ -1,0 +1,19 @@
+# One entry per kind of CSV export. Run `financial_plan inspect-csv data/your_file.csv` for a
+# suggested entry, or use Settings > Data sources in the app.
+#
+# Example (separate debit/credit columns):
+#   - name: Visa card
+#     files: data/visa*.csv
+#     date: {column: Transaction Date}         # format detected, or e.g. format: '%m/%d/%Y'
+#     description: Description
+#     amount: {debit: Debit, credit: Credit}
+#     category_column: Category                # optional: the bank's own category
+#
+# Example (one signed amount column):
+#   - name: Checking
+#     files: data/checking*.csv
+#     date: {column: Date}
+#     description: [Description, Memo]
+#     amount: {column: Amount, outflow: negative}   # withdrawals are negative
+
+sources: []
