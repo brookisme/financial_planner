@@ -149,7 +149,7 @@ def save_section(plan_dir: Path, key: str, value: Any) -> Path:
     doc = _read_yaml(path) if path.exists() else None
     if doc is None:
         doc = {}
-    doc[key] = _merge_into(doc.get(key), value)
+    doc[key] = _merge_into(doc.get(key), _int_keys(value))
     path.parent.mkdir(parents=True, exist_ok=True)
     buf = StringIO()
     yaml.dump(doc, buf)
@@ -198,7 +198,7 @@ def _yaml() -> YAML:
     yaml = YAML()
     yaml.preserve_quotes = True
     yaml.indent(mapping=2, sequence=4, offset=2)
-    yaml.width = 100
+    yaml.width = 4096   # never wrap long strings
     return yaml
 
 
@@ -242,8 +242,22 @@ def _merge_into(old: Any, new: Any) -> Any:
         for key, value in new.items():
             old[key] = _merge_into(old.get(key), value)
         return old
-    if isinstance(old, list) and isinstance(new, list) and len(old) == len(new):
+    if isinstance(old, list) and isinstance(new, list):
         for i, value in enumerate(new):
-            old[i] = _merge_into(old[i], value)
+            if i < len(old):
+                old[i] = _merge_into(old[i], value)
+            else:
+                old.append(value)
+        del old[len(new):]
         return old
     return new
+
+
+def _int_keys(value: Any) -> Any:
+    """Turn digit-only mapping keys back into ints (JSON sends ``{"55": 900}``)."""
+    if isinstance(value, dict):
+        return {int(k) if isinstance(k, str) and k.isdigit() else k: _int_keys(v)
+                for k, v in value.items()}
+    if isinstance(value, list):
+        return [_int_keys(v) for v in value]
+    return value
