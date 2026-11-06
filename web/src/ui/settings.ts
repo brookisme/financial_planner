@@ -14,7 +14,7 @@ import {renderCategorizeTab} from './categorize';
 //
 const TABS: Array<[string, string]> = [['household', 'Household'], ['money', 'Savings & income'],
   ['assumptions', 'Assumptions'], ['sources', 'Data sources'], ['categories', 'Categories'],
-  ['categorize', 'Categorize']];
+  ['categorize', 'Categorize'], ['share', 'Share plan']];
 const KINDS: Array<[string, string]> = [['spending', 'Regular'], ['one_time', 'One-time'],
   ['credit', 'Credit (money in)'], ['ignore', 'Ignore']];
 const CLAIM_AGES = [62, 63, 64, 65, 66, 67, 68, 69, 70];
@@ -82,7 +82,7 @@ function renderTab(): void {
   const body = document.getElementById('st-body')!;
   const render: Record<string, (el: HTMLElement) => void> = {
     household: renderHousehold, money: renderMoney, assumptions: renderAssumptions,
-    sources: renderSources, categories: renderCategories,
+    sources: renderSources, categories: renderCategories, share: renderShare,
     categorize: (el) => renderCategorizeTab(el, () => {
       dirty = true;
     }),
@@ -754,6 +754,45 @@ function catMapRow(r: Dict = {}): string {
 function catNamesDatalist(): string {
   const cats = (cfg.raw.categories as Dict[]|undefined) ?? [];
   return `<datalist id="cat-names">${cats.map((c) => `<option value="${esc(c.name)}">`).join('')}</datalist>`;
+}
+
+// ---------- share plan ----------
+
+/** Save the whole plan as one file; how to open one. */
+function renderShare(el: HTMLElement): void {
+  el.innerHTML = `<div class="panel form">
+      <h3>Send your whole plan</h3>
+      <p class="small">Saves everything in this plan as one <span class="mono">.zip</span> file:
+        settings, categories and rules, your CSV files, and (if ticked) your planner edits and
+        saved scenarios. Send it by AirDrop or Messages; the other person opens it in their
+        Financial Planner and sees exactly what you see.</p>
+      <label class="field check"><input type="checkbox" id="sh-state" checked>Include my planner
+        edits and saved scenarios</label>
+      <div class="btns"><a class="btn primary" id="sh-dl" href="/api/plan/export" download>Save plan
+        as a file</a></div>
+      <div class="banner"><b>This file contains your real transactions and finances.</b>
+        <span class="small">Share it only with people you trust, privately (AirDrop, Messages,
+        email to them). Don't post it or put it in a public folder.</span></div>
+    </div>
+    <div class="panel form">
+      <h3>Open a plan someone sent you</h3>
+      <ul class="small" style="margin:0;padding-left:1.2em;display:grid;gap:4px">
+        <li><b>Desktop app (Mac):</b> menu-bar icon › <i>Open Plan File…</i> and pick the
+          <span class="mono">.zip</span>. You can keep both plans or replace yours (yours is kept
+          as a backup folder). New users get the same choice on the first launch.</li>
+        <li><b>Command line:</b> <span class="mono">financial_plan import "Household Budget
+          2026-11-06.zip"</span></li>
+        <li><b>By hand:</b> double-click the <span class="mono">.zip</span> in Finder. The folder
+          it makes is a plan; open it with <i>Change Plan Folder…</i>.</li>
+      </ul>
+      <p class="small muted">Only want to share a what-if? Use <i>Share</i> in the Scenarios bar
+        instead: it sends just the numbers, not your data.</p>
+    </div>`;
+  const box = el.querySelector<HTMLInputElement>('#sh-state')!;
+  const link = el.querySelector<HTMLAnchorElement>('#sh-dl')!;
+  box.addEventListener('change', () => {
+    link.href = box.checked ? '/api/plan/export' : '/api/plan/export?state=false';
+  });
 }
 
 // ---------- categories ----------
