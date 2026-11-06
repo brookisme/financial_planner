@@ -230,6 +230,18 @@
     });
     cur[path[path.length - 1]] = value;
   }
+  function describeData(p) {
+    const counts = /* @__PURE__ */ new Map();
+    p.tx.forEach((t) => counts.set(t[4], (counts.get(t[4]) ?? 0) + 1));
+    const used = p.sources.filter((_, i) => counts.get(i));
+    if (!used.length) return "No transactions yet: add your CSV exports in Settings \u203A Data sources.";
+    const list = (xs) => xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
+    const months = p.month_labels;
+    let s = `Built from ${list(used)} (${p.tx.length.toLocaleString("en-US")} transactions, ${months[0]} \u2013 ${months[months.length - 1]}).`;
+    const notes = p.household.partners.filter((x) => x.take_home_note).map((x) => `${x.name} (${x.take_home_note})`);
+    if (notes.length) s += ` Take-home pay: ${notes.join(", ")}.`;
+    return `${s} Change any number in the planner to see what it does to the month.`;
+  }
   function regularMo(d, st) {
     return sum(d.regular.map((i) => st.plan[d.cats[i].name] ?? 0));
   }
@@ -3061,7 +3073,14 @@
     );
     el.innerHTML = `<div class="panel form"><h3>Plan</h3><div class="fgrid">
       ${input("plan.title", "Title", plan.title ?? "Household Budget")}
-      ${input("plan.subtitle", "Subtitle", plan.subtitle ?? "", "text", "", "data-optional")}
+      ${input(
+      "plan.subtitle",
+      "Subtitle",
+      plan.subtitle ?? "",
+      "text",
+      "Empty: a line naming your data sources and months",
+      "data-optional"
+    )}
       ${input(
       "plan.months",
       "Months to average",
@@ -3522,7 +3541,7 @@
     setCurrency(p.plan.currency_symbol);
     document.title = p.plan.title;
     $("title").textContent = p.plan.title;
-    $("subtitle").textContent = p.plan.subtitle;
+    $("subtitle").textContent = p.plan.subtitle || describeData(p);
     const months = p.month_labels;
     $("eyebrow").textContent = months.length ? `${p.plan.title} \xB7 ${months[0]} \u2013 ${months[months.length - 1]} data` : p.plan.title;
     p.warnings.forEach((w) => banner(esc(w)));
