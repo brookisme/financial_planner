@@ -56,8 +56,10 @@ pixi run financial_plan start ~/MyFinancialPlan   # open it
 ```
 
 Put your bank and card CSV exports in `~/MyFinancialPlan/data/`, then click the **gear (Settings)**
-at the top right to add your household, connect the CSVs and categorize. Prefer a double-click icon?
-Run `pixi run financial_plan launcher`.
+at the top right to add your household, connect the CSVs and categorize. On a Mac,
+`pixi run financial_plan launcher` adds a **Financial Planner** app to Applications (menu-bar icon,
+opens in the browser). A no-code download is described in the
+[Desktop App](https://github.com/brookisme/financial_planner/wiki/Desktop-App) page.
 
 Step-by-step guide: [Quick Start](https://github.com/brookisme/financial_planner/wiki/Quick-Start).
 Want an AI assistant to set it up with you? See [LLM_SETUP.md](LLM_SETUP.md).
@@ -71,7 +73,7 @@ Want an AI assistant to set it up with you? See [LLM_SETUP.md](LLM_SETUP.md).
 | `financial_plan validate [dir]` | Check the config and CSVs. |
 | `financial_plan inspect-csv FILE` | Show a CSV's columns and a suggested source entry. |
 | `financial_plan categorize [dir] [--unmatched]` | Category averages; rows no rule caught. |
-| `financial_plan launcher` | Put a "Financial Planner" shortcut on the desktop. |
+| `financial_plan launcher` | Mac: add Financial Planner.app to Applications. Elsewhere: a desktop shortcut. |
 
 Details: [Command Line](https://github.com/brookisme/financial_planner/wiki/Command-Line).
 
