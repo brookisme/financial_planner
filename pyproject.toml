@@ -4,10 +4,23 @@ build-backend = "hatchling.build"
 
 [project]
 name = "financial-planner"
-version = "0.1.0"
+dynamic = ["version"]   # from src/financial_planner/__init__.py
 description = "A local, private household budget and long-term financial planner driven by CSVs and YAML."
 readme = "README.md"
 license = { text = "BSD-3-Clause" }
+authors = [{ name = "Brookie Guzder-Williams" }]
+keywords = ["budget", "personal finance", "retirement", "529", "planner", "household"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: End Users/Desktop",
+  "License :: OSI Approved :: BSD License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Office/Business :: Financial",
+]
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.110",
@@ -20,8 +33,20 @@ dependencies = [
 dev = ["pytest>=8", "httpx>=0.27"]
 desktop = ["pystray>=0.19", "pillow>=10"]   # menu-bar app (financial_planner.desktop)
 
+[project.urls]
+Homepage = "https://github.com/brookisme/financial_planner"
+Documentation = "https://github.com/brookisme/financial_planner/wiki"
+Issues = "https://github.com/brookisme/financial_planner/issues"
+
 [project.scripts]
 financial_plan = "financial_planner.cli:main"
+
+[tool.hatch.version]
+path = "src/financial_planner/__init__.py"
+pattern = "__version__: str = '(?P<version>[^']+)'"
+
+[tool.hatch.build.targets.sdist]
+exclude = ["/web/node_modules", "/installer/dist", "/assets", "/.pixi", "/dist"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/financial_planner"]
@@ -50,6 +75,8 @@ financial-planner = { path = ".", editable = true, extras = ["desktop"] }
 nodejs = ">=20"
 pytest = ">=8"
 httpx = ">=0.27"
+python-build = "*"
+twine = "*"
 
 [tool.pixi.environments]
 default = { solve-group = "default" }
@@ -67,3 +94,9 @@ web-test = { cmd = "npm test", cwd = "web", depends-on = ["web-install"] }
 web-check = { cmd = "npm run check", cwd = "web", depends-on = ["web-install"] }
 demo-data = "python scripts/make_demo_data.py examples/demo"
 test-all = { depends-on = ["test", "web-test"] }
+# releasing (see the wiki's Releasing page)
+dist-clean = "rm -rf dist"
+dist-build = { cmd = "python -m build", depends-on = ["dist-clean", "web-build"] }
+dist-check = { cmd = "twine check --strict dist/*", depends-on = ["dist-build"] }
+publish-test = { cmd = "twine upload --repository testpypi dist/*", depends-on = ["dist-check"] }
+publish = { cmd = "twine upload dist/*", depends-on = ["dist-check"] }
