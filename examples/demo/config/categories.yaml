@@ -1,0 +1,65 @@
+# kind: spending (regular, averaged) | one_time (kept out of averages, optional toggle)
+#       credit (money in that can offset spending) | ignore (transfers, payments, paychecks)
+# kids_gone_pct / retired_pct: how the category changes once the kids leave / after retiring.
+
+categories:
+  # Essentials
+  - {name: Housing, group: Essentials}
+  - {name: Utilities, group: Essentials, kids_gone_pct: -15}
+  - {name: Groceries, group: Essentials, kids_gone_pct: -35}
+  - {name: Kids' school, group: Essentials, kids_gone_pct: -100}
+  - {name: Kids' activities, group: Essentials, kids_gone_pct: -100}
+  - {name: Health & Wellness, group: Essentials, kids_gone_pct: -15, retired_pct: 20}
+  - {name: Insurance, group: Essentials, retired_pct: -50}
+  - {name: Transportation, group: Essentials, kids_gone_pct: -15, retired_pct: -20}
+  - {name: Pets, group: Essentials}
+  # Flexible ("try 10% less" trims these)
+  - {name: Shopping & Household, group: Flexible, flexible: true, kids_gone_pct: -30}
+  - {name: Dining, group: Flexible, flexible: true, kids_gone_pct: -25}
+  - {name: Coffee, group: Flexible, flexible: true}
+  - {name: Travel, group: Flexible, flexible: true, kids_gone_pct: -15, retired_pct: 25}
+  - {name: Entertainment, group: Flexible, flexible: true, kids_gone_pct: -20, retired_pct: 10}
+  - {name: Subscriptions & Phone, group: Flexible, flexible: true, kids_gone_pct: -15}
+  # Unsorted
+  - {name: Venmo, group: Unsorted, kids_gone_pct: -30}
+  - {name: Cash & checks, group: Unsorted, kids_gone_pct: -30}
+  - {name: Other, group: Unsorted, kids_gone_pct: -20}
+
+  # One-time / yearly costs: shown as toggles under "Yearly and one-time costs"
+  - name: Income tax
+    kind: one_time
+    tax: true
+    default_on: true
+    label: Set aside for income tax
+    note: state payment
+  - name: Property tax
+    kind: one_time
+    tax: true
+    in_retirement: true
+    label: Set aside for property tax
+  - name: Furniture
+    kind: one_time
+    label: Include furniture / large household purchases
+    note: may come up again
+
+  # Credits (money in)
+  - name: Benefit reimbursements
+    kind: credit
+    default_on: true
+    offsets: Shopping & Household     # shown as a line under Shopping & Household
+    label: Reimbursements
+    note: work benefit payments
+  - name: Federal tax refund
+    kind: credit
+    default_on: true
+    offsets: Income tax               # nested under the income tax toggle
+    label: Subtract the federal refund
+  - name: Other credits
+    kind: credit
+    label: Other reimbursements & credits
+    note: mobile deposits and other money in
+
+  # Never counted
+  - {name: Paychecks, kind: ignore}
+  - {name: Transfers & payments, kind: ignore}
+  - {name: 529 contributions, kind: ignore}
