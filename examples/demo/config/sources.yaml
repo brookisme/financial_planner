@@ -1,0 +1,25 @@
+# Each source is one kind of CSV export. Column names are whatever your bank uses.
+
+sources:
+  - name: Northwind card
+    files: data/northwind_card_*.csv
+    date: {column: Transaction Date}          # format is detected (here 2025-01-31)
+    description: Description
+    amount: {debit: Debit, credit: Credit}    # separate money-out / money-in columns
+    category_column: Category                 # the card's own category, usable in rules
+    category_map:                             # card category -> plan category (when no rule matches)
+      Dining: Dining
+      Gas/Automotive: Transportation
+      Health Care: Health & Wellness
+      Entertainment: Entertainment
+      Airfare: Travel
+      Lodging: Travel
+      Other Travel: Transportation
+      Phone/Cable: Subscriptions & Phone
+      Merchandise: Shopping & Household
+
+  - name: Harbor checking
+    files: data/harbor_checking_*.csv
+    date: {column: Posting Date, format: '%m/%d/%Y'}
+    description: [Description, Memo]          # several columns are joined with a space
+    amount: {column: Amount, outflow: negative}   # one signed column; withdrawals are negative
