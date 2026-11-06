@@ -1,8 +1,9 @@
 """
 Launcher
 
-The no-code path: remembers which plan folder to open and creates a desktop shortcut that starts
-the app with a double click (``.command`` on macOS, ``.desktop`` on Linux, ``.bat`` on Windows).
+The no-code path: remembers which plan folder to open and creates a launcher that starts the app
+with a double click: ``Financial Planner.app`` in ~/Applications on macOS (the menu-bar app, see
+desktop.py), a ``.desktop`` file on Linux and a ``.bat`` file on Windows.
 
 License: BSD 3-Clause
 """
@@ -11,8 +12,11 @@ License: BSD 3-Clause
 #
 import json
 import os
+import plistlib
 import shlex
+import shutil
 import stat
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
@@ -23,6 +27,8 @@ from typing import Optional
 SETTINGS_FILE: Path = Path.home() / '.financial_planner.json'
 DEFAULT_PLAN_DIR: Path = Path.home() / 'FinancialPlan'
 SHORTCUT_NAME: str = 'Financial Planner'
+APP_BUNDLE_ID: str = 'io.github.brookisme.financialplanner'
+ASSETS: Path = Path(__file__).parent / 'assets'
 
 
 #
@@ -70,13 +76,17 @@ def create_shortcut(desktop: Optional[Path] = None, plan_dir: Optional[Path] = N
     """Write a double-clickable launcher.
 
     Args:
-        desktop: Folder to put it in (defaults to ~/Desktop).
-        plan_dir: Plan to open. Empty means "the remembered plan, or ~/FinancialPlan".
+        desktop: Folder to put it in (default: ~/Applications on macOS, else ~/Desktop).
+        plan_dir: Plan to open. Empty means "the remembered plan, or ask on first launch".
         platform: ``sys.platform`` style name (for tests).
 
     Returns:
-        The launcher file.
+        The launcher file (or app bundle on macOS).
     """
+    if platform == 'darwin':
+        if plan_dir:
+            remember_plan(Path(plan_dir))
+        return create_mac_app(desktop or Path.home() / 'Applications')
     desktop = desktop or Path.home() / 'Desktop'
     desktop.mkdir(parents=True, exist_ok=True)
     python = sys.executable
@@ -88,16 +98,52 @@ def create_shortcut(desktop: Optional[Path] = None, plan_dir: Optional[Path] = N
                         'pause\r\n', encoding='utf-8')
         return path
     cmd = ' '.join(shlex.quote(a) for a in [python, '-m', 'financial_planner', 'start', *target])
-    if platform == 'darwin':
-        path = desktop / f'{SHORTCUT_NAME}.command'
-        path.write_text(f'#!/bin/bash\n# Starts the Financial Planner. Close this window to stop '
-                        f'it.\n{cmd}\n', encoding='utf-8')
-    else:
-        path = desktop / 'financial-planner.desktop'
-        path.write_text(f'[Desktop Entry]\nType=Application\nName={SHORTCUT_NAME}\n'
-                        f'Exec={cmd}\nTerminal=true\n', encoding='utf-8')
+    path = desktop / 'financial-planner.desktop'
+    path.write_text(f'[Desktop Entry]\nType=Application\nName={SHORTCUT_NAME}\n'
+                    f'Exec={cmd}\nTerminal=true\n', encoding='utf-8')
     path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return path
+
+
+def create_mac_app(folder: Path, python: Optional[str] = None) -> Path:
+    """Build ``Financial Planner.app`` that runs the menu-bar app with this Python.
+
+    This is the quick path for people who already have the code (``financial_plan launcher``).
+    The downloadable no-code app is built from ``installer/`` instead and installs its own
+    environment on first launch.
+
+    Args:
+        folder: Where to put the app (e.g. ~/Applications).
+        python: Python to run (default: the current interpreter).
+
+    Returns:
+        The app bundle.
+    """
+    app = Path(folder) / f'{SHORTCUT_NAME}.app'
+    if app.exists():
+        shutil.rmtree(app)
+    (app / 'Contents' / 'MacOS').mkdir(parents=True)
+    (app / 'Contents' / 'Resources').mkdir()
+    info = {'CFBundleName': SHORTCUT_NAME, 'CFBundleDisplayName': SHORTCUT_NAME,
+            'CFBundleIdentifier': APP_BUNDLE_ID, 'CFBundleVersion': '0.1.0',
+            'CFBundleShortVersionString': '0.1.0', 'CFBundlePackageType': 'APPL',
+            'CFBundleExecutable': 'launch', 'CFBundleIconFile': 'AppIcon',
+            'LSMinimumSystemVersion': '11.0', 'NSHighResolutionCapable': True}
+    with (app / 'Contents' / 'Info.plist').open('wb') as fh:
+        plistlib.dump(info, fh)
+    launch = app / 'Contents' / 'MacOS' / 'launch'
+    launch.write_text('#!/bin/bash\n# Runs the Financial Planner menu-bar app.\n'
+                      f'exec {shlex.quote(python or sys.executable)} '
+                      '-m financial_planner.desktop\n',
+                      encoding='utf-8')
+    launch.chmod(0o755)
+    icon = ASSETS / 'AppIcon.icns'
+    if icon.exists():
+        shutil.copy(icon, app / 'Contents' / 'Resources' / 'AppIcon.icns')
+    if sys.platform == 'darwin':
+        subprocess.run(['codesign', '-s', '-', '--deep', '--force', str(app)],
+                       capture_output=True, check=False)
+    return app
 
 
 def is_plan_dir(path: Path) -> bool:
