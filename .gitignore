@@ -19,3 +19,6 @@ web/node_modules/
 !tests/fixtures/*.csv
 
 .DS_Store
+
+# desktop app builds
+installer/dist/
