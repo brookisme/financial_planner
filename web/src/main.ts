@@ -16,6 +16,7 @@ import {buildPlanner} from './ui/planner';
 import {buildRetire} from './ui/retire';
 import {buildScenarios} from './ui/scenarios';
 import {settingsDirty, showSettings} from './ui/settings';
+import {buildTheme} from './ui/theme';
 
 //
 // INTERNAL
@@ -55,6 +56,7 @@ function banner(html: string, err = false): void {
 /** Loads and builds everything. */
 async function start(): Promise<void> {
   buildHelp();
+  buildTheme();
   window.addEventListener('hashchange', route);
   let p;
   try {
