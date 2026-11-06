@@ -52,22 +52,25 @@ class PlanInfo(_Model):
     Attributes:
         title: Page title.
         subtitle: Short description under the title.
-        today: The plan's "now" as YYYY-MM. Defaults to the month after the last transaction.
-        months: How many of the most recent months of transactions to average over.
+        today: The plan's "now" as YYYY-MM. Defaults to the month after the averaging window.
+        months: How many months of transactions to average over.
+        last_month: Last month of the averaging window (YYYY-MM). Defaults to the month of the
+            newest transaction; set it to leave out a partial month.
         currency_symbol: Shown before amounts.
     """
     title: str = 'Household Budget'
     subtitle: str = ''
     today: Optional[str] = None
     months: int = Field(12, ge=1, le=120)
+    last_month: Optional[str] = None
     currency_symbol: str = '$'
 
-    @field_validator('today')
+    @field_validator('today', 'last_month')
     @classmethod
     def _check_today(cls, value: Optional[str]) -> Optional[str]:
         """Require YYYY-MM."""
         if value is not None and not YEAR_MONTH_RE.match(str(value)):
-            raise ValueError('today must look like 2026-01')
+            raise ValueError('must look like 2026-01')
         return value
 
 
