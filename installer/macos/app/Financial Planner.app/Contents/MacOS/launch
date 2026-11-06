@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# macOS app entry point: sets paths and native dialogs, then runs the shared bootstrap
+# (copied into Resources/ when the app is assembled).
+#
+# License: BSD 3-Clause
+set -euo pipefail
+
+RES="$(cd "$(dirname "$0")/../Resources" && pwd)"
+export APP_SUPPORT="$HOME/Library/Application Support/FinancialPlanner"
+export PAYLOAD="$RES/payload"
+mkdir -p "$APP_SUPPORT"
+
+ICON="POSIX file \"$RES/AppIcon.icns\""
+_alert() {
+  osascript -e "display dialog \"$1\" buttons {\"OK\"} default button \"OK\" with title \"Financial Planner\" with icon ($ICON)" >/dev/null 2>&1 || true
+}
+# A dialog that stays up while the first-run install downloads (closed by _setup_done).
+_setup_start() {
+  osascript -e "display dialog \"Setting up Financial Planner (first launch).
+
+Downloading what it needs. This takes a few minutes and happens only once; the planner opens in your browser when it's ready.\" buttons {\"OK\"} default button \"OK\" with title \"Financial Planner\" with icon ($ICON) giving up after 1800" >/dev/null 2>&1 &
+  _SETUP_PID=$!
+}
+_setup_done() { [ -n "${_SETUP_PID:-}" ] && kill "$_SETUP_PID" 2>/dev/null; _SETUP_PID=""; return 0; }
+
+# shellcheck disable=SC1091
+source "$RES/bootstrap.sh"
+bootstrap_and_launch
