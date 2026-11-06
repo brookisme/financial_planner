@@ -13,6 +13,7 @@ License: BSD 3-Clause
 #
 import re
 from pathlib import Path
+from urllib.parse import quote
 from typing import Any, Awaitable, Callable
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request
@@ -24,6 +25,7 @@ from financial_planner.config import (DATA_DIR, ConfigError, format_validation_e
                                       load_config, load_config_raw, save_section)
 from financial_planner.rules import preview
 from financial_planner.schema import Rule, Source
+from financial_planner.share import archive_name, export_bytes
 from financial_planner.sources import SourceError, inspect_csv, read_source_file, resolve_files
 from financial_planner.state import read_state, write_state_key
 from financial_planner.summary import build_payload, load_plan, transaction_rows
@@ -193,6 +195,16 @@ def create_app(plan_dir: Path) -> FastAPI:
                 'skipped': skipped, 'errors': errors,
                 'sample': [{'date': t.date, 'description': t.description, 'amount': t.amount,
                             'bank_category': t.bank_category} for t in rows[:PREVIEW_ROWS]]}
+
+    @app.get('/api/plan/export')
+    def export(state: bool = True) -> Response:
+        """The whole plan as one .zip file (to send to someone)."""
+        title = (load_config_raw(plan_dir).raw.get('plan') or {}).get('title') or 'Financial Plan'
+        name = archive_name(str(title))
+        data = export_bytes(plan_dir, include_state=state, top=name[:-4])
+        return Response(data, media_type='application/zip', headers={
+            'Content-Disposition': f"attachment; filename*=UTF-8''{quote(name)}",
+            'Cache-Control': 'no-store'})
 
     @app.get('/api/state')
     def get_state() -> dict[str, Any]:
