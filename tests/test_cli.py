@@ -62,6 +62,17 @@ def test_suggest_source_signed_column(plan_dir: Path) -> None:
     assert src['date'] == {'column': 'Date', 'format': '%m/%d/%Y'}
 
 
+def test_export_and_import_commands(demo_dir: Path, tmp_path: Path,
+                                    capsys: pytest.CaptureFixture[str]) -> None:
+    out = tmp_path / 'shared.zip'
+    assert main(['export', str(demo_dir), '-o', str(out)]) == 0
+    assert 'real financial data' in capsys.readouterr().out
+    assert main(['import', str(out), str(tmp_path / 'theirs')]) == 0
+    assert load_config(tmp_path / 'theirs').config.plan.title == 'Household Budget'
+    assert main(['import', str(out), str(tmp_path / 'theirs')]) == 1
+    assert 'already a plan' in capsys.readouterr().err
+
+
 def test_choose_plan_dir_order(tmp_path: Path, plan_dir: Path) -> None:
     settings = tmp_path / 'settings.json'
     assert choose_plan_dir(str(plan_dir), settings_file=settings) == (plan_dir, False)
