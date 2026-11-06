@@ -256,6 +256,9 @@ body{margin:0}
 .top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
 .gear{display:inline-flex;align-items:center;gap:6px;font-family:var(--f-display);font-weight:600;font-size:14px;color:var(--ink);text-decoration:none;padding:6px 12px;border-radius:999px;border:1px solid var(--ink3);background:var(--panel);white-space:nowrap}
 .gear svg{width:16px;height:16px}
+.top-tools{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.seg.theme{border-radius:999px}
+.seg.theme button{font-size:12px;padding:5px 10px}
 .gear:hover,.gear:focus-visible{border-color:var(--ink);outline:none}
 .gear.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 .banner{border:1px solid var(--rule);border-left:4px solid var(--avg);border-radius:8px;padding:10px 14px;background:var(--panel);display:grid;gap:4px;font-size:14px}
