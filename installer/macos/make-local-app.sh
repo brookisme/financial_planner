@@ -21,6 +21,13 @@ bash macos/assemble-app.sh "$DEST"
 codesign -s - --deep --force "$DEST" >/dev/null 2>&1 || true
 # a changed app at the same path can keep its old icon until Finder notices
 touch "$DEST"
+# building from a checkout: refresh an already-installed environment with this code
+SUPPORT="$HOME/Library/Application Support/FinancialPlanner"
+if [ -n "${FP_SOURCE:-}" ] && [ -x "$SUPPORT/env/.pixi/envs/default/bin/python" ]; then
+  echo "› updating the installed environment from $FP_SOURCE"
+  cp "$DEST/Contents/Resources/payload/pixi.toml" "$SUPPORT/env/pixi.toml"
+  "$SUPPORT/pixi" reinstall --manifest-path "$SUPPORT/env/pixi.toml" financial-planner >/dev/null
+fi
 echo "✓ built $DEST"
 echo "  Open it from Applications (or Spotlight: Financial Planner)."
 echo "  Logs: ~/Library/Application Support/FinancialPlanner/"
