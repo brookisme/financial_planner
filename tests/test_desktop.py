@@ -54,16 +54,16 @@ def test_no_running_server_without_a_live_record(app_support: Path) -> None:
     assert desktop.running_server() is None
 
 
-@pytest.mark.parametrize('button, expect, demo', [
-    ('Use ~/FinancialPlan', 'default', False), ('Try the Demo', 'demo', True),
-    ('Choose Folder…', 'chosen', False), (None, None, False)])
+@pytest.mark.parametrize('pick, expect, demo', [
+    (0, 'default', False), (3, 'demo', True), (2, 'chosen', False), (None, None, False)])
 def test_first_run_choices(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-                           button: str | None, expect: str | None, demo: bool) -> None:
+                           pick: int | None, expect: str | None, demo: bool) -> None:
     folders = {'default': tmp_path / 'FinancialPlan', 'demo': tmp_path / 'Demo',
                'chosen': tmp_path / 'Chosen'}
     monkeypatch.setattr(desktop, 'DEFAULT_PLAN_DIR', folders['default'])
     monkeypatch.setattr(desktop, 'DEMO_DIR', folders['demo'])
-    monkeypatch.setattr(desktop, 'ask_buttons', lambda *a, **k: button)
+    choice = None if pick is None else desktop.FIRST_RUN_CHOICES[pick]
+    monkeypatch.setattr(desktop, 'ask_list', lambda *a, **k: choice)
     monkeypatch.setattr(desktop, 'choose_folder', lambda prompt: folders['chosen'])
     made: list[tuple[Path, bool]] = []
     monkeypatch.setattr(desktop, 'init_plan', lambda p, demo=False: made.append((p, demo)))
@@ -105,3 +105,21 @@ def test_server_exits_when_the_app_dies(demo_dir: Path) -> None:
         for proc in (parent, server):
             if proc.poll() is None:
                 proc.kill()
+
+
+def test_open_shared_plan(demo_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from financial_planner.share import export_plan
+    archive = tmp_path / 'shared.zip'
+    export_plan(demo_dir, archive)
+    home_plan = tmp_path / 'FinancialPlan'
+    monkeypatch.setattr(desktop, 'DEFAULT_PLAN_DIR', home_plan)
+    monkeypatch.setattr(desktop, 'choose_file', lambda prompt: archive)
+    monkeypatch.setattr(desktop, 'notify', lambda text: None)
+    assert desktop.open_shared_plan() == home_plan                 # nothing there yet
+    monkeypatch.setattr(desktop, 'ask_buttons', lambda *a, **k: 'Keep Both')
+    assert desktop.open_shared_plan() == tmp_path / 'FinancialPlan 2'
+    monkeypatch.setattr(desktop, 'ask_buttons', lambda *a, **k: 'Replace')
+    assert desktop.open_shared_plan() == home_plan
+    assert any(p.name.startswith('FinancialPlan (before import') for p in tmp_path.iterdir())
+    monkeypatch.setattr(desktop, 'ask_buttons', lambda *a, **k: 'Cancel')
+    assert desktop.open_shared_plan() is None
