@@ -33,6 +33,15 @@ def test_window_and_totals(plan_dir: Path) -> None:
     assert totals['Other'] == [0.0, 30.0]             # unmatched money out -> default
 
 
+def test_last_month_fixes_the_window(plan_dir: Path) -> None:
+    cfg = plan_dir / 'config' / 'config.yaml'
+    cfg.write_text(cfg.read_text().replace('  months: 2\n', '  months: 1\n  last_month: 2025-01\n'))
+    data = load_plan(plan_dir)
+    assert data.months == ['2025-01'] and data.today == '2025-02'
+    payload = build_payload(plan_dir)
+    assert all(row[0].startswith('2025-01') for row in payload['tx'])
+
+
 def test_ignored_categories_stay_out_of_window_and_payload(plan_dir: Path) -> None:
     (plan_dir / 'data' / 'bank_2025.csv').write_text(
         (plan_dir / 'data' / 'bank_2025.csv').read_text() + '06/01/2025,ACME PAYROLL,10\n')
