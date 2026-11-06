@@ -100,8 +100,7 @@ def create_app(plan_dir: Path) -> FastAPI:
             data = load_plan(plan_dir)
         except ConfigError as err:
             raise HTTPException(400, str(err)) from err
-        return {'rows': transaction_rows(data), 'rules': [r.model_dump(exclude_none=True)
-                                                          for r in data.config.rules],
+        return {'rows': transaction_rows(data), 'rules': data.loaded.raw.get('rules') or [],
                 'categories': [c.model_dump() for c in data.categories],
                 'sources': [s.name for s in data.config.sources], 'months': data.months}
 
