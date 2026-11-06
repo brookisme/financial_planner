@@ -2,7 +2,7 @@
 Launcher
 
 The no-code path: remembers which plan folder to open and creates a launcher that starts the app
-with a double click: ``Financial Planner.app`` in ~/Applications on macOS (the menu-bar app, see
+with a double click: ``Financial Planner.app`` in /Applications on macOS (the menu-bar app, see
 desktop.py), a ``.desktop`` file on Linux and a ``.bat`` file on Windows.
 
 License: BSD 3-Clause
@@ -76,7 +76,8 @@ def create_shortcut(desktop: Optional[Path] = None, plan_dir: Optional[Path] = N
     """Write a double-clickable launcher.
 
     Args:
-        desktop: Folder to put it in (default: ~/Applications on macOS, else ~/Desktop).
+        desktop: Folder to put it in (default: /Applications on macOS, or ~/Applications if
+            that isn't writable; ~/Desktop elsewhere).
         plan_dir: Plan to open. Empty means "the remembered plan, or ask on first launch".
         platform: ``sys.platform`` style name (for tests).
 
@@ -86,7 +87,7 @@ def create_shortcut(desktop: Optional[Path] = None, plan_dir: Optional[Path] = N
     if platform == 'darwin':
         if plan_dir:
             remember_plan(Path(plan_dir))
-        return create_mac_app(desktop or Path.home() / 'Applications')
+        return create_mac_app(desktop or applications_folder())
     desktop = desktop or Path.home() / 'Desktop'
     desktop.mkdir(parents=True, exist_ok=True)
     python = sys.executable
@@ -105,6 +106,12 @@ def create_shortcut(desktop: Optional[Path] = None, plan_dir: Optional[Path] = N
     return path
 
 
+def applications_folder() -> Path:
+    """/Applications (what Finder shows) if writable, otherwise ~/Applications."""
+    main = Path('/Applications')
+    return main if os.access(main, os.W_OK) else Path.home() / 'Applications'
+
+
 def create_mac_app(folder: Path, python: Optional[str] = None) -> Path:
     """Build ``Financial Planner.app`` that runs the menu-bar app with this Python.
 
@@ -113,7 +120,7 @@ def create_mac_app(folder: Path, python: Optional[str] = None) -> Path:
     environment on first launch.
 
     Args:
-        folder: Where to put the app (e.g. ~/Applications).
+        folder: Where to put the app (e.g. /Applications).
         python: Python to run (default: the current interpreter).
 
     Returns:
