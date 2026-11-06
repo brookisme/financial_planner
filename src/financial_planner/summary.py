@@ -75,7 +75,7 @@ def load_plan(plan_dir: Path) -> PlanData:
     categories = categories_in_use(cfg, assignments)
     kinds = {c.name: c.kind for c in categories}
     counted = [t for t, a in zip(txs, assignments) if kinds[a.category] != 'ignore']
-    months = month_window(counted, cfg.plan.months)
+    months = month_window(counted, cfg.plan.months, cfg.plan.last_month)
     today = cfg.plan.today or (next_month(months[-1]) if counted else today_month())
     return PlanData(loaded=loaded, transactions=txs, assignments=assignments,
                     categories=categories, months=months, today=today, warnings=warnings)
@@ -105,17 +105,19 @@ def categories_in_use(cfg: Config, assignments: list[Assignment]) -> list[Catego
     return out
 
 
-def month_window(transactions: list[Transaction], months: int) -> list[str]:
-    """The last ``months`` calendar months that end at the newest transaction.
+def month_window(transactions: list[Transaction], months: int,
+                 last_month: Optional[str] = None) -> list[str]:
+    """The ``months`` calendar months ending at ``last_month`` or the newest transaction.
 
     Args:
         transactions: Counted transactions.
         months: Window length.
+        last_month: Optional fixed last month (YYYY-MM).
 
     Returns:
         YYYY-MM strings, oldest first. With no transactions, the months before today.
     """
-    last = max((t.month for t in transactions), default=None)
+    last = last_month or max((t.month for t in transactions), default=None)
     if last is None:
         last = previous_month(today_month())
     first = last
