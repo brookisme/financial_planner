@@ -1,0 +1,68 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "financial-planner"
+version = "0.1.0"
+description = "A local, private household budget and long-term financial planner driven by CSVs and YAML."
+readme = "README.md"
+license = { text = "BSD-3-Clause" }
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.110",
+  "uvicorn>=0.29",
+  "pydantic>=2.6",
+  "ruamel.yaml>=0.18",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+financial_plan = "financial_planner.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/financial_planner"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"examples/demo/config" = "financial_planner/templates/demo/config"
+"examples/demo/data" = "financial_planner/templates/demo/data"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+#
+# pixi
+#
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "osx-64", "linux-64", "win-64"]
+
+[tool.pixi.dependencies]
+python = ">=3.11,<3.14"
+
+[tool.pixi.pypi-dependencies]
+financial-planner = { path = ".", editable = true }
+
+[tool.pixi.feature.dev.dependencies]
+nodejs = ">=20"
+pytest = ">=8"
+httpx = ">=0.27"
+
+[tool.pixi.environments]
+default = { solve-group = "default" }
+dev = { features = ["dev"], solve-group = "default" }
+
+[tool.pixi.tasks]
+start = "financial_plan start"
+demo = "financial_plan start examples/demo"
+
+[tool.pixi.feature.dev.tasks]
+test = "pytest"
+web-install = { cmd = "npm install", cwd = "web" }
+web-build = { cmd = "npm run build", cwd = "web", depends-on = ["web-install"] }
+web-test = { cmd = "npm test", cwd = "web", depends-on = ["web-install"] }
+web-check = { cmd = "npm run check", cwd = "web", depends-on = ["web-install"] }
+demo-data = "python scripts/make_demo_data.py examples/demo"
+test-all = { depends-on = ["test", "web-test"] }
