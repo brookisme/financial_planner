@@ -8,13 +8,14 @@ The desktop app: a menu-bar (macOS) / system-tray icon that owns the planner's l
 - Starts the server for that plan and opens the browser.
 - Menu: Open Financial Planner, Change Plan Folder…, New Plan…, Open Plan File… / Save Plan as
   File… (share a whole plan as one .zip), Show Plan Folder, Check for Updates… (installed app
-  only) and Quit (which stops the server).
+  only), Uninstall… and Quit (which stops the server).
 - Single instance: launching again just opens the browser on the running app.
 
 Native dialogs use AppleScript on macOS; elsewhere the app falls back to the defaults.
 
 Run with ``python -m financial_planner.desktop`` (the macOS app bundle does this). The installed
-app sets ``FP_PIXI`` and ``FP_MANIFEST`` so "Check for Updates…" can update its environment.
+app sets ``FP_PIXI`` and ``FP_MANIFEST`` so "Check for Updates…" can update its environment, and
+``FP_APP_BUNDLE`` (the .app path) so "Uninstall…" can remove it.
 
 License: BSD 3-Clause
 """
@@ -24,6 +25,7 @@ License: BSD 3-Clause
 import atexit
 import json
 import os
+import shlex
 import socket
 import subprocess
 import sys
@@ -33,9 +35,10 @@ import webbrowser
 from pathlib import Path
 from typing import Any, Optional
 
+from financial_planner import __version__
 from financial_planner.cli import init_plan, load_plan_title
-from financial_planner.launcher import (DEFAULT_PLAN_DIR, is_plan_dir, remember_plan,
-                                        remembered_plan)
+from financial_planner.launcher import (DEFAULT_PLAN_DIR, SETTINGS_FILE, is_plan_dir,
+                                        remember_plan, remembered_plan)
 from financial_planner.share import ShareError, archive_name, export_plan, import_plan, unique_path
 
 #
@@ -48,6 +51,7 @@ SERVER_FILE: Path = APP_SUPPORT / 'server.json'
 LOG_FILE: Path = APP_SUPPORT / 'desktop.log'
 SERVER_LOG: Path = APP_SUPPORT / 'server.log'
 ASSETS: Path = Path(__file__).parent / 'assets'
+PYPI_JSON: str = 'https://pypi.org/pypi/financial-planner/json'
 DEFAULT_PORT: int = 8765
 START_TIMEOUT_S: float = 30.0
 DEMO_DIR: Path = Path.home() / 'FinancialPlan-Demo'
@@ -188,23 +192,68 @@ class App:
         subprocess.Popen([opener, str(self.plan_dir)])
 
     def _update(self, *_: Any) -> None:
-        """Update the installed app's environment, then restart the server."""
+        """Check PyPI for a newer release; if there is one, install it and restart the app."""
+        latest = latest_version()
+        if latest is None:
+            alert("Couldn't check for updates. Is the internet connected?")
+            return
+        if not is_newer(latest, __version__):
+            alert(f"You're up to date: Financial Planner {__version__} is the latest version.")
+            return
         pixi, manifest = os.environ.get('FP_PIXI'), os.environ.get('FP_MANIFEST')
         if not (pixi and manifest):
-            alert('Updates are only available in the installed app. With pixi, run '
-                  '"git pull" in the financial_planner folder instead.')
+            alert(f'Version {latest} is available (you have {__version__}). This copy was '
+                  'installed with pip or pixi: update it with "pip install -U '
+                  'financial-planner" (or "git pull" in a source checkout).')
             return
-        if not confirm('Download and install the latest Financial Planner? The planner '
-                       'restarts when it is done.', 'Update'):
+        if not confirm(f'Version {latest} is available (you have {__version__}). Update now? '
+                       'Financial Planner restarts when it is done (about a minute).', 'Update'):
             return
-        notify('Updating Financial Planner…')
+        notify(f'Updating Financial Planner to {latest}…')
         self.stop()
         result = subprocess.run([pixi, 'update', '--manifest-path', manifest],
                                 capture_output=True, text=True)
         log(f'pixi update: {result.returncode}\n{result.stdout}\n{result.stderr}')
-        self.start()
-        alert('Updated. Quit and reopen Financial Planner to finish.' if result.returncode == 0
-              else f'The update failed. Details are in {LOG_FILE}.')
+        if result.returncode != 0:
+            self.start()
+            alert(f'The update failed; still on {__version__}. Details are in {LOG_FILE}.')
+            return
+        self._relaunch()
+
+    def _relaunch(self) -> None:
+        """Restart the whole app (so the new version's menu-bar code runs too)."""
+        bundle = app_bundle()
+        if bundle is None:
+            self.start()
+            alert('Updated. Quit and reopen Financial Planner to finish.')
+            return
+        script = (f'while kill -0 {os.getpid()} 2>/dev/null; do sleep 0.5; done; '
+                  f'open {shlex.quote(str(bundle))}')
+        subprocess.Popen(['/bin/bash', '-c', script], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+        if self._icon is not None:
+            self._icon.stop()
+        os._exit(0)
+
+    def _uninstall(self, *_: Any) -> None:
+        """Remove the app and its downloaded files (never plans), after confirming."""
+        bundle = app_bundle()
+        removes = [f'• {_short(APP_SUPPORT)} (downloaded files and logs)']
+        if bundle:
+            removes.insert(0, f'• {bundle} (the app)')
+        if not confirm('Uninstall Financial Planner?\n\nThis removes:\n' + '\n'.join(removes) +
+                       '\n\nYour plans are NOT removed. The current one stays in:\n'
+                       f'{self.plan_dir}', 'Uninstall'):
+            return
+        self.stop()
+        spawn_cleanup(os.getpid(), uninstall_targets(bundle))
+        if bundle is None:
+            alert('Financial Planner will remove its files when it quits. Drag the app to the '
+                  'Trash to finish.')
+        if self._icon is not None:
+            self._icon.stop()
+        os._exit(0)
 
     def _quit(self, *_: Any) -> None:
         """Stop the server and the tray icon."""
@@ -218,6 +267,7 @@ class App:
         return tray.Menu(
             item('Open Financial Planner', self._open, default=True),
             sep,
+            item(f'Financial Planner {__version__}', None, enabled=False),
             item(lambda _: f'Plan: {_short(self.plan_dir)}', None, enabled=False),
             item('Change Plan Folder…', self._change_folder),
             item('New Plan…', self._new_plan),
@@ -227,6 +277,7 @@ class App:
             item('Save Plan as File…', self._save_file),
             sep,
             item('Check for Updates…', self._update),
+            item('Uninstall…', self._uninstall),
             item('Quit Financial Planner', self._quit),
         )
 
@@ -323,6 +374,68 @@ def open_shared_plan() -> Optional[Path]:
         return None
     notify(f'Opened the shared plan in {_short(folder)}')
     return folder
+
+
+def latest_version(url: str = PYPI_JSON) -> Optional[str]:
+    """The newest version on PyPI, or None if it can't be reached."""
+    try:
+        with urllib.request.urlopen(url, timeout=8) as res:
+            return str(json.load(res)['info']['version'])
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def is_newer(candidate: str, current: str) -> bool:
+    """Whether release ``candidate`` is newer than ``current`` (pre-releases ignored)."""
+    def key(version: str) -> Optional[tuple[int, ...]]:
+        parts = version.split('.')
+        return tuple(int(p) for p in parts) if all(p.isdigit() for p in parts) else None
+    new, old = key(candidate), key(current)
+    return bool(new and old and new > old)
+
+
+def app_bundle() -> Optional[Path]:
+    """The running .app (from FP_APP_BUNDLE), if it looks like ours."""
+    value = os.environ.get('FP_APP_BUNDLE')
+    if not value:
+        return None
+    path = Path(value)
+    ok = path.suffix == '.app' and (path / 'Contents' / 'MacOS' / 'launch').is_file()
+    return path if ok else None
+
+
+def uninstall_targets(bundle: Optional[Path]) -> list[Path]:
+    """What Uninstall… deletes: the app, its support folder and the remembered plan setting.
+
+    Never the home folder, a plan folder, or anything outside those.
+    """
+    targets: list[Path] = []
+    if bundle is not None:
+        targets.append(bundle)
+    support = APP_SUPPORT.resolve()
+    home = Path.home().resolve()
+    if support not in (home, Path('/')) and support.is_relative_to(home) and \
+            not (support / 'config').is_dir():
+        targets.append(support)
+    targets.append(SETTINGS_FILE)
+    return targets
+
+
+def cleanup_script(pid: int, targets: list[Path]) -> str:
+    """A shell script that waits for ``pid`` to exit, then deletes ``targets``."""
+    paths = ' '.join(shlex.quote(str(t)) for t in targets)
+    note = ('osascript -e \'display notification "Financial Planner was uninstalled. Your '
+            'plans were kept." with title "Financial Planner"\' >/dev/null 2>&1')
+    return (f'#!/bin/bash\nwhile kill -0 {pid} 2>/dev/null; do sleep 0.5; done\nsleep 1\n'
+            f'rm -rf {paths}\n' + (note if sys.platform == 'darwin' else '') + '\n')
+
+
+def spawn_cleanup(pid: int, targets: list[Path]) -> None:
+    """Run the cleanup script detached, so it outlives this process."""
+    log(f'uninstalling: {", ".join(map(str, targets))}')
+    subprocess.Popen(['/bin/bash', '-c', cleanup_script(pid, targets)],
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True)
 
 
 def free_port(preferred: int) -> int:
