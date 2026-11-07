@@ -9,6 +9,7 @@ The ``financial_plan`` command:
 - ``inspect-csv FILE``: show a CSV's columns and a suggested ``sources`` entry.
 - ``categorize [dir]``: print per-category averages; ``--unmatched`` lists rows no rule caught.
 - ``export [dir]`` / ``import FILE [dir]``: pack a whole plan into one .zip / unpack one.
+- ``uninstall``: remove the desktop app and its downloaded files (never plans).
 - ``launcher``: make a double-click launcher (macOS: ``Financial Planner.app`` in /Applications).
 
 License: BSD 3-Clause
@@ -176,6 +177,10 @@ def _parser() -> argparse.ArgumentParser:
                    help='replace an existing plan there (it is kept as a backup folder)')
     p.set_defaults(func=_cmd_import)
 
+    p = sub.add_parser('uninstall', help='remove the desktop app and its files (plans are kept)')
+    p.add_argument('--yes', action='store_true', help="don't ask for confirmation")
+    p.set_defaults(func=_cmd_uninstall)
+
     p = sub.add_parser('launcher', help='create a double-click launcher (macOS: an app in '
                                         '/Applications)')
     p.add_argument('--plan-dir', help='plan to open (default: the last one used, or ask)')
@@ -294,6 +299,38 @@ def load_plan_title(plan_dir: Path) -> str:
     from financial_planner.config import load_config_raw
     plan = load_config_raw(plan_dir).raw.get('plan') or {}
     return str(plan.get('title') or 'Financial Plan')
+
+
+def _cmd_uninstall(args: argparse.Namespace) -> int:
+    """``uninstall``: remove the desktop app, its support folder and the remembered plan."""
+    from financial_planner import desktop
+    from financial_planner.launcher import SHORTCUT_NAME, remembered_plan
+    if desktop.running_server():
+        print('error: Financial Planner is running; quit it first (menu-bar icon › Quit)',
+              file=sys.stderr)
+        return 1
+    bundles = [p for p in (Path('/Applications') / f'{SHORTCUT_NAME}.app',
+                           Path.home() / 'Applications' / f'{SHORTCUT_NAME}.app') if p.exists()]
+    targets = bundles + [t for t in desktop.uninstall_targets(None) if t.exists()]
+    plan = remembered_plan()
+    if not targets:
+        print('nothing to remove: the desktop app is not installed')
+    else:
+        print('this removes:\n' + '\n'.join(f'  {t}' for t in targets))
+        if plan:
+            print(f'your plans are kept (the last one used is {plan})')
+        if not args.yes and input('remove them? [y/N] ').strip().lower() not in ('y', 'yes'):
+            print('nothing removed')
+            return 0
+        for target in targets:
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink(missing_ok=True)
+        print('removed')
+    print('to remove the Python package too: pip uninstall financial-planner '
+          '(or remove it from your pixi project)')
+    return 0
 
 
 def _cmd_launcher(args: argparse.Namespace) -> int:
