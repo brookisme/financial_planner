@@ -5,7 +5,7 @@
 #   PIXI_BIN=/path/to/pixi FP_SOURCE=/path/to/checkout bash assemble-app.sh "/dest/Financial Planner.app"
 #
 # PIXI_BIN   the pixi binary to bundle (default: the pixi on PATH)
-# FP_SOURCE  optional local checkout to install instead of the GitHub repository
+# FP_SOURCE  optional local checkout to install instead of the PyPI release
 #
 # License: BSD 3-Clause
 set -euo pipefail
