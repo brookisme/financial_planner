@@ -113,3 +113,26 @@ def test_state_round_trip(tmp_path: Path) -> None:
     assert read_state(tmp_path) == {'scenarios': {'list': [1]}}
     with pytest.raises(ValueError):
         write_state_key(tmp_path, 'other', 1)
+
+
+def test_uninstall_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                           capsys: pytest.CaptureFixture[str]) -> None:
+    from financial_planner import desktop
+    home = tmp_path / 'home'
+    support = home / 'Library' / 'Application Support' / 'FinancialPlanner'
+    (support / 'env').mkdir(parents=True)
+    (home / 'FinancialPlan' / 'config').mkdir(parents=True)
+    settings = home / '.financial_planner.json'
+    settings.write_text('{}')
+    app = create_mac_app(home / 'Applications')
+    monkeypatch.setattr(desktop.Path, 'home', staticmethod(lambda: home))
+    monkeypatch.setattr(desktop, 'APP_SUPPORT', support)
+    monkeypatch.setattr(desktop, 'SERVER_FILE', support / 'server.json')
+    monkeypatch.setattr(desktop, 'SETTINGS_FILE', settings)
+    monkeypatch.setattr('builtins.input', lambda prompt: 'n')
+    assert main(['uninstall']) == 0 and app.exists()            # declined: nothing removed
+    assert main(['uninstall', '--yes']) == 0
+    assert not app.exists() and not support.exists() and not settings.exists()
+    assert (home / 'FinancialPlan' / 'config').is_dir()
+    assert 'nothing to remove' in (main(['uninstall', '--yes']) == 0 and
+                                   capsys.readouterr().out)
