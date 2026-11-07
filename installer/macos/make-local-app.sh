@@ -2,7 +2,7 @@
 # Build "Financial Planner.app" on this Mac and put it in /Applications (no certificates needed;
 # it's ad-hoc signed so it runs here). First launch installs the environment (a few minutes).
 #
-#   bash installer/macos/make-local-app.sh                 # installs the GitHub version
+#   bash installer/macos/make-local-app.sh                 # installs the latest PyPI release
 #   FP_SOURCE=. bash installer/macos/make-local-app.sh     # installs this checkout instead
 #   bash installer/macos/make-local-app.sh ~/Applications  # another destination folder
 #
