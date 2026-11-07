@@ -75,7 +75,18 @@ Child 1). See [Privacy and Safety](https://github.com/brookisme/financial_planne
 
 ## Quick start (terminal)
 
-For people comfortable with a terminal (any OS). Install [pixi](https://pixi.sh), then:
+For people comfortable with a terminal (any OS). With Python 3.11+, install from
+[PyPI](https://pypi.org/project/financial-planner/) and open the demo:
+
+```bash
+pip install financial-planner                      # add [desktop] for the Mac menu-bar app
+financial_plan init ~/FinancialPlan-Demo --demo
+financial_plan start ~/FinancialPlan-Demo
+```
+
+Your browser opens at http://127.0.0.1:8765 with a fictional demo household.
+
+Or from source with [pixi](https://pixi.sh) (for development):
 
 ```bash
 git clone https://github.com/brookisme/financial_planner.git
@@ -83,13 +94,11 @@ cd financial_planner
 pixi run demo
 ```
 
-Your browser opens at http://127.0.0.1:8765 with a fictional demo household.
-
 ## Your own plan
 
 ```bash
-pixi run financial_plan init ~/MyFinancialPlan    # create a plan folder
-pixi run financial_plan start ~/MyFinancialPlan   # open it
+financial_plan init ~/MyFinancialPlan    # create a plan folder (prefix with `pixi run` from source)
+financial_plan start ~/MyFinancialPlan   # open it
 ```
 
 Put your bank and card CSV exports in `~/MyFinancialPlan/data/`, then click the **gear (Settings)**
