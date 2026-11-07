@@ -8,6 +8,7 @@ set -euo pipefail
 RES="$(cd "$(dirname "$0")/../Resources" && pwd)"
 export APP_SUPPORT="$HOME/Library/Application Support/FinancialPlanner"
 export PAYLOAD="$RES/payload"
+export FP_APP_BUNDLE="$(cd "$RES/../.." && pwd)"   # lets "Uninstall…" remove the app
 mkdir -p "$APP_SUPPORT"
 
 ICON="POSIX file \"$RES/AppIcon.icns\""
