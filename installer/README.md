@@ -18,7 +18,7 @@ A no-code way to run the Financial Planner: download, drag to Applications, doub
 
 1. The app bundles a pinned **pixi** binary and a small **manifest** (`manifest/pixi.toml`).
 2. **First launch** copies pixi to `~/Library/Application Support/FinancialPlanner/`, installs the
-   environment from the manifest (Python + `financial-planner[desktop]` from GitHub) with a
+   environment from the manifest (Python + `financial-planner[desktop]` from PyPI; no git) with a
    "Setting up…" dialog, then starts the app. Later launches skip straight to step 3.
 3. The app runs `python -m financial_planner.desktop`: a **menu-bar icon** that asks where the plan
    lives the first time (default `~/FinancialPlan`, a chosen folder, or the demo), starts the local
@@ -31,7 +31,7 @@ and the server exits whenever the app does (Quit, force quit or crash).
 
 ```
 installer/
-  manifest/pixi.toml              environment the app installs (git dependency on this repo)
+  manifest/pixi.toml              environment the app installs (financial-planner from PyPI)
   shared/bootstrap.sh             ensure pixi → ensure env → run the menu-bar app
   macos/app/Financial Planner.app template bundle (Info.plist + launch script)
   macos/assemble-app.sh           the one place that puts a bundle together
@@ -47,7 +47,7 @@ The menu-bar app itself is `src/financial_planner/desktop.py` (tested in `tests/
 ## Build it on your Mac
 
 ```bash
-bash installer/macos/make-local-app.sh                # installs the GitHub version
+bash installer/macos/make-local-app.sh                # installs the latest PyPI release
 FP_SOURCE=. bash installer/macos/make-local-app.sh    # installs this checkout instead
 ```
 
@@ -66,8 +66,8 @@ bash installer/macos/make-dist.sh
 
 This produces `installer/dist/FinancialPlanner-macos-arm64.zip` (Apple Silicon) and
 `FinancialPlanner-macos-x86_64.zip` (Intel), each bundling the matching pinned pixi. Attach both
-to a GitHub release. The manifest installs the `main` branch from GitHub, so push before
-releasing.
+to a GitHub release. The apps install `financial-planner` from PyPI (any 0.x version, newest
+first), so publish the PyPI release before handing out apps that need its changes.
 
 The apps are **unsigned**: the first time, people right-click the app → **Open** → **Open**.
 Signing and notarizing need an Apple Developer account.
