@@ -140,6 +140,7 @@ def create_mac_app(folder: Path, python: Optional[str] = None) -> Path:
         plistlib.dump(info, fh)
     launch = app / 'Contents' / 'MacOS' / 'launch'
     launch.write_text('#!/bin/bash\n# Runs the Financial Planner menu-bar app.\n'
+                      'export FP_APP_BUNDLE="$(cd "$(dirname "$0")/../.." && pwd)"\n'
                       f'exec {shlex.quote(python or sys.executable)} '
                       '-m financial_planner.desktop\n',
                       encoding='utf-8')
