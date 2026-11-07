@@ -123,3 +123,54 @@ def test_open_shared_plan(demo_dir: Path, tmp_path: Path, monkeypatch: pytest.Mo
     assert any(p.name.startswith('FinancialPlan (before import') for p in tmp_path.iterdir())
     monkeypatch.setattr(desktop, 'ask_buttons', lambda *a, **k: 'Cancel')
     assert desktop.open_shared_plan() is None
+
+
+def test_uninstall_targets_and_cleanup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+    import sys
+    from financial_planner.launcher import create_mac_app
+    home = tmp_path / 'home'
+    support = home / 'Library' / 'Application Support' / 'FinancialPlanner'
+    plan = home / 'FinancialPlan'
+    for d in (support / 'env', plan / 'config'):
+        d.mkdir(parents=True)
+    settings = home / '.financial_planner.json'
+    settings.write_text('{}')
+    bundle = create_mac_app(tmp_path / 'Applications')
+    monkeypatch.setattr(desktop, 'APP_SUPPORT', support)
+    monkeypatch.setattr(desktop, 'SETTINGS_FILE', settings)
+    monkeypatch.setattr(desktop.Path, 'home', staticmethod(lambda: home))
+    monkeypatch.setenv('FP_APP_BUNDLE', str(bundle))
+    assert desktop.app_bundle() == bundle
+    targets = desktop.uninstall_targets(desktop.app_bundle())
+    assert targets == [bundle, support.resolve(), settings]
+    waiter = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(1)'])
+    cleanup = subprocess.Popen(['/bin/bash', '-c', desktop.cleanup_script(waiter.pid, targets)])
+    assert bundle.exists()                              # nothing deleted while the app runs
+    waiter.wait()                                       # (reap it, as launchd does for the app)
+    cleanup.wait(timeout=30)
+    assert not bundle.exists() and not support.exists() and not settings.exists()
+    assert (plan / 'config').is_dir()                   # plans are never touched
+
+
+def test_uninstall_never_targets_home_or_a_plan(tmp_path: Path,
+                                                monkeypatch: pytest.MonkeyPatch) -> None:
+    home = tmp_path / 'home'
+    (home / 'config').mkdir(parents=True)
+    monkeypatch.setattr(desktop.Path, 'home', staticmethod(lambda: home))
+    for support in (home, home / '..', tmp_path / 'elsewhere'):
+        monkeypatch.setattr(desktop, 'APP_SUPPORT', support)
+        assert desktop.uninstall_targets(None) == [desktop.SETTINGS_FILE]
+    monkeypatch.setenv('FP_APP_BUNDLE', str(tmp_path / 'NotAnApp'))
+    assert desktop.app_bundle() is None
+
+
+@pytest.mark.parametrize('candidate, current, newer', [
+    ('0.2.0', '0.1.0', True), ('0.1.10', '0.1.9', True), ('0.1.0', '0.1.0', False),
+    ('0.1.0', '0.2.0', False), ('1.0', '0.9.9', True), ('0.2.0rc1', '0.1.0', False)])
+def test_is_newer(candidate: str, current: str, newer: bool) -> None:
+    assert desktop.is_newer(candidate, current) is newer
+
+
+def test_latest_version_handles_no_network() -> None:
+    assert desktop.latest_version('http://127.0.0.1:9/nothing') is None
