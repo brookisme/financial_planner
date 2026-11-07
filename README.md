@@ -43,7 +43,8 @@ appears at the top right of your screen while the app runs. Click it for:
 | Change Plan Folder… / New Plan… | Switch to another plan, or start a new one |
 | Show Plan Folder | Opens the plan folder in Finder (e.g. to add CSV files) |
 | Open Plan File… / Save Plan as File… | Open a plan someone sent you / send yours |
-| Check for Updates… | Gets the latest version |
+| Check for Updates… | Checks for a newer version; installs it and restarts if you say yes |
+| Uninstall… | Removes the app and its downloaded files (your plans are kept) |
 | Quit Financial Planner | Stops it |
 
 Closing the browser tab leaves it running in the menu bar; opening the app again reuses it.
@@ -120,6 +121,7 @@ Want an AI assistant to set it up with you? See [LLM_SETUP.md](https://github.co
 | `financial_plan inspect-csv FILE` | Show a CSV's columns and a suggested source entry. |
 | `financial_plan export [dir]` / `import FILE` | Share a whole plan (config + data) as one .zip. |
 | `financial_plan categorize [dir] [--unmatched]` | Category averages; rows no rule caught. |
+| `financial_plan uninstall` | Remove the desktop app and its files (plans are kept). |
 | `financial_plan launcher` | Mac: add Financial Planner.app to /Applications. Elsewhere: a desktop shortcut. |
 
 Details: [Command Line](https://github.com/brookisme/financial_planner/wiki/Command-Line).
