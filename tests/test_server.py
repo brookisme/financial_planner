@@ -8,6 +8,7 @@ License: BSD 3-Clause
 #
 # Imports
 #
+import re
 from pathlib import Path
 
 import pytest
@@ -40,6 +41,21 @@ def test_writes_need_the_app_header(client: TestClient) -> None:
     assert client.put('/api/state/ui', json={'a': 1}).status_code == 403
     assert client.put('/api/state/ui', json={'a': 1}, headers=HEADERS).status_code == 200
     assert client.get('/api/state').json() == {'ui': {'a': 1}}
+
+
+def test_web_files_are_revalidated(client: TestClient) -> None:
+    response = client.get('/static/app.js')
+    assert response.status_code == 200
+    assert response.headers['cache-control'] == 'no-cache'
+
+
+def test_page_links_web_files_by_content_hash(client: TestClient) -> None:
+    page = client.get('/')
+    assert page.headers['cache-control'] == 'no-store'
+    for name in ('app.js', 'app.css'):
+        match = re.search(rf'"/static/{name}\?v=([0-9a-f]{{12}})"', page.text)
+        assert match, name
+        assert client.get(f'/static/{name}?v={match.group(1)}').status_code == 200
 
 
 def test_other_hosts_are_refused(client: TestClient) -> None:
