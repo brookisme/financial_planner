@@ -15,6 +15,7 @@ import {esc} from '../format';
 import {clone, diffBudget, rebaseBudget} from '../model';
 import type {PlannerState, SavedBudget} from '../types';
 import {fillPlanner, refreshCompare} from './planner';
+import {refreshSpending} from './spending';
 import {refreshStrip} from './strip';
 
 //
@@ -26,32 +27,54 @@ export function savedBudgets(): SavedBudget[] {
   return state.list;
 }
 
+/** Id of the 12-month average, offered first wherever a budget is picked. */
+export const AVG = '__avg';
+
+/** Choices for a budget picker: the 12-month average, then every saved budget. */
+export function budgetChoices(): Array<[string, string]> {
+  return [[AVG, `${app.d.n}-mo avg`], ...state.list.map((b): [string, string] => [b.id, b.name])];
+}
+
+/** A budget's settings by id (AVG: the 12-month averages), or null if it no longer exists. */
+export function budgetSt(id: string|null): PlannerState|null {
+  if (id === AVG) return app.defs.st;
+  const b = state.list.find((x) => x.id === id);
+  return b ? stOf(b) : null;
+}
+
 /**
- * What the summary rows show: the budget compared with the actual months (`cmp`) and the
- * budgets shown as extra rows (`rows`); `save` stores it with the budgets.
+ * Picker choices saved with the budgets: the budget compared with the actual months (`cmp`),
+ * the budgets shown as extra summary rows (`rows`) and the one attached to the Spending chart
+ * (`attach`); `save` stores them.
  */
-export function stripView(): {cmp: string|null; rows: string[]; save: () => void} {
-  state.view ??= {cmp: null, rows: []};
+export function stripView(): View & {save: () => void} {
+  state.view ??= {cmp: null, rows: [], attach: null};
   return Object.assign(state.view, {save: () => send('PUT', '/api/state/budgets',
-      {...state, view: {cmp: state.view!.cmp, rows: state.view!.rows}}).catch(() => {})});
+      {...state, view: plainView()}).catch(() => {})});
 }
 
 /** Loads saved budgets and wires the bar. */
 export async function buildBudgets(): Promise<void> {
   const saved = await get<{budgets?: typeof state}>('/api/state');
   state = {list: saved.budgets?.list ?? [], active: saved.budgets?.active ?? null,
-    view: saved.budgets?.view ?? {cmp: null, rows: []}};
+    view: {cmp: null, rows: [], attach: null, ...saved.budgets?.view}};
   wireBar();
   onChange(touch);
   renderBar();
   refreshCompare();
+  refreshSpending();
 }
 
 //
 // INTERNAL
 //
-let state: {list: SavedBudget[]; active: string|null;
-            view?: {cmp: string|null; rows: string[]}} = {list: [], active: null};
+interface View {
+  cmp: string|null;
+  rows: string[];
+  attach: string|null;
+}
+
+let state: {list: SavedBudget[]; active: string|null; view?: View} = {list: [], active: null};
 let pendingSwitch: string|null = null;
 let pendingDel = false;
 let pendingReset = false;
@@ -70,12 +93,23 @@ function dirtyFrom(b: SavedBudget): boolean {
   return diffBudget(app.d, stOf(b), app.S.st).length > 0;
 }
 
-/** Saves the list to the plan folder and refreshes the Compare choices. */
+/** The picker choices without the save function. */
+function plainView(): View|undefined {
+  const v = state.view;
+  return v && {cmp: v.cmp, rows: v.rows, attach: v.attach};
+}
+
+/** Saves the list to the plan folder and refreshes everything that offers budgets. */
 function persist(): void {
-  send('PUT', '/api/state/budgets', {...state,
-    view: state.view && {cmp: state.view.cmp, rows: state.view.rows}}).catch(() => {});
+  send('PUT', '/api/state/budgets', {...state, view: plainView()}).catch(() => {});
   refreshCompare();
   refreshStrip();
+  refreshSpending();
+}
+
+/** Whether the page differs from the 12-month averages. */
+function offAvg(): boolean {
+  return diffBudget(app.d, app.defs.st, app.S.st).length > 0;
 }
 
 /** Loads budget settings onto the page. */
@@ -97,18 +131,18 @@ function touch(): void {
 function renderBar(): void {
   const a = active();
   const dirty = a ? dirtyFrom(a) : null;
-  const chips = state.list.map((b) => `<button type="button" class="chip" data-id="${
-      esc(b.id)}" aria-pressed="${b.id === state.active}">${esc(b.name)}${
+  const avgOn = !a && !offAvg();
+  const chips = `<button type="button" class="chip" data-id="${AVG}" aria-pressed="${avgOn}">${
+      app.d.n}-mo avg</button>` + state.list.map((b) => `<button type="button" class="chip"
+      data-id="${esc(b.id)}" aria-pressed="${b.id === state.active}">${esc(b.name)}${
       b.id === state.active && dirty ? ' •' : ''}</button>`).join('');
   document.querySelectorAll<HTMLElement>('[data-bg-tabs]').forEach((el) => {
-    el.innerHTML = chips || (el.id === 'bg-tabs' ?
-        '<span class="small muted">No saved budgets yet. Name this one and save it.</span>' :
-        '<span class="small muted">No saved budgets yet. Save one in <a href="#budget">Budgeting</a>.</span>');
+    el.innerHTML = chips;
   });
   const line = pendingSwitch ?
       'Unsaved changes will be lost. Click the budget again to switch.' :
-      a ? (dirty ? `Unsaved changes to "${a.name}"` : `Showing "${a.name}"`) :
-      'Not saved as a budget yet';
+      a && dirty ? `Unsaved changes to "${a.name}"` :
+      !a && !avgOn ? 'Unsaved changes (not saved as a budget)' : '';
   document.querySelectorAll<HTMLElement>('[data-bg-state]').forEach((el) => {
     el.textContent = line;
   });
@@ -123,19 +157,18 @@ function renderBar(): void {
   document.querySelectorAll<HTMLButtonElement>('[data-bg-tabs] button').forEach((btn) => {
     btn.addEventListener('click', () => {
       const id = btn.dataset.id!;
-      if (id === state.active) return;
+      if (btn.getAttribute('aria-pressed') === 'true') return;
       const cur = active();
-      const dirtyNow = cur ? dirtyFrom(cur) : !state.list.some((b) => !dirtyFrom(b)) &&
-          diffBudget(app.d, app.defs.st, app.S.st).length > 0;
+      const dirtyNow = cur ? dirtyFrom(cur) : !state.list.some((b) => !dirtyFrom(b)) && offAvg();
       if (dirtyNow && pendingSwitch !== id) {
         pendingSwitch = id;
         renderBar();
         return;
       }
       pendingSwitch = null;
-      state.active = id;
+      state.active = id === AVG ? null : id;
       persist();
-      apply(stOf(state.list.find((b) => b.id === id)!));
+      apply(budgetSt(id)!);
     });
   });
 }
