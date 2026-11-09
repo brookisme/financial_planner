@@ -289,8 +289,8 @@ function buildFolds(): void {
   };
   const allBtn = $('r-fold-all');
   const markAll = () => {
-    allBtn.textContent = panels.every((p) => p.classList.contains('folded')) ? 'Expand all' :
-        'Collapse all';
+    allBtn.textContent = panels.every((p) => p.classList.contains('folded')) ? 'Expand Settings' :
+        'Collapse Settings';
   };
   panels.forEach((el) => {
     el.classList.add('foldable');
@@ -304,7 +304,7 @@ function buildFolds(): void {
     });
   });
   allBtn.addEventListener('click', () => {
-    const fold = allBtn.textContent === 'Collapse all';
+    const fold = allBtn.textContent === 'Collapse Settings';
     panels.forEach((el) => set(el, fold));
     store();
     markAll();
