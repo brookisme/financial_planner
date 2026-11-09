@@ -17,11 +17,18 @@ household:
         at_67: 0                # monthly estimate from your Social Security statement
       pensions: []              # e.g. - {name: Pension, estimates: {55: 900, 60: 2800, 65: 5800}}
       accounts: []              # e.g. - {name: 401(k), balance: 50000, monthly: 500}
-  children: []                  # e.g. - {name: Child 1, age: 8, college_529: {balance: 10000, monthly: 250}}
+  children: []                  # e.g. - {age: 8, college_529: {balance: 10000, monthly: 250}}
+                                #   (name defaults to Child 1, Child 2, ...)
 
 other_income_monthly: 0
-savings: []                     # e.g. - {name: Emergency savings, monthly: 300}
-investments: []                 # e.g. - {name: Brokerage, balance: 20000, return_pct: 6}
+# Contributions: a fixed `monthly`, or `left_pct` (% of what is left each month) with optional
+# min_monthly / max_monthly.
+savings:
+  - {name: Savings account, type: savings, balance: 0, monthly: 0}
+  - {name: Emergency fund, type: emergency, balance: 0, monthly: 0}   # add max_balance: 15000
+investments:
+  - {name: Stocks, type: stocks, balance: 0, return_pct: 0, monthly: 0}
+  - {name: Bonds, type: bonds, balance: 0, return_pct: 0, monthly: 0}
 
 assumptions:
   retirement:
