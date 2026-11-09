@@ -8,13 +8,15 @@
 import {$, app, load} from './app';
 import {esc, setCurrency} from './format';
 import {describeData} from './model';
+import {buildBudgets} from './ui/budgets';
 import {buildCollege} from './ui/college';
-import {buildExplorer} from './ui/explorer';
 import {buildFuture} from './ui/future';
 import {buildHelp} from './ui/help';
 import {buildPlanner} from './ui/planner';
+import {loadPresets} from './ui/presets';
 import {buildRetire} from './ui/retire';
-import {buildScenarios} from './ui/scenarios';
+import {buildSpending} from './ui/spending';
+import {buildStrip} from './ui/strip';
 import {settingsDirty, showSettings} from './ui/settings';
 import {buildTheme} from './ui/theme';
 
@@ -89,12 +91,14 @@ async function start(): Promise<void> {
     banner('<b>No partners yet.</b> Add at least one under <a href="#settings/household">' +
         'Settings › Household</a> to see income and retirement.');
   }
+  await loadPresets();
+  buildSpending();
   buildPlanner();
-  buildExplorer();
   buildCollege();
   buildRetire();
   buildFuture();
-  await buildScenarios();
+  await buildBudgets();
+  buildStrip();
   ready = true;
   const back = sessionStorage.getItem('fp-hash');
   sessionStorage.removeItem('fp-hash');
