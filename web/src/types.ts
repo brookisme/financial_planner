@@ -53,6 +53,7 @@ export interface Partner {
   take_home_note: string;
   raise_pct: number;
   social_security: {at_67: number; claim_age: number|null};
+  retirement_age: number|null;
   pensions: Pension[];
   accounts: Account[];
 }
@@ -139,9 +140,14 @@ export interface PlannerState {
 export type CollegeState = Record<string, {school: string; ret: number; inf: number;
                                           cost: number}>;
 
-/** Retirement settings. Pension / account keys are `<partner id>:<index>`. */
+/**
+ * Retirement settings. `age` is the primary partner's retirement age; `ages` holds the other
+ * partners' (null: the same year as the primary). Pension / account keys are
+ * `<partner id>:<index>`.
+ */
 export interface RetireState {
   age: number;
+  ages: Record<string, number|null>;
   ret: number;
   inf: number;
   wd: number;
