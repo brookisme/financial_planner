@@ -8,8 +8,9 @@
 // CONSTANTS
 //
 const TOPICS: Array<[string, string]> = [['h-start', 'Quick start'], ['h-setup', 'Setting up'],
-  ['h-explore', 'Spending'], ['h-planner', 'Budgeting'], ['h-scen', 'Sharing'], ['h-cat', 'Categorizing'], ['h-college', 'College 529s'],
-  ['h-retire', 'Retirement'], ['h-future', 'Spending over time'], ['h-privacy', 'Privacy'],
+  ['h-strip', 'Summary rows'], ['h-explore', 'Spending'], ['h-planner', 'Budgeting'],
+  ['h-cat', 'Categorizing'], ['h-college', 'College 529s'], ['h-retire', 'Retirement'],
+  ['h-future', 'Spending over time'], ['h-scen', 'Sharing'], ['h-privacy', 'Privacy'],
   ['h-faq', 'Questions']];
 const BODY = `
 <h3 id="h-start">Quick start</h3>
@@ -17,9 +18,11 @@ const BODY = `
   <li><b>Look at your spending.</b> <i>Spending</i> shows what your transactions say: each
     category's monthly average, lowest and highest month, and every transaction behind it.</li>
   <li><b>Make a budget.</b> In <i>Budgeting</i> every category starts at its average. Type a new
-    number and the strip at the top updates. Changed boxes turn blue.</li>
+    number to try a change. Changed boxes turn blue.</li>
   <li><b>Save it.</b> Name it in the Budgets bar and click <i>Save as new</i>. Pick any saved
-    budget (or the average) in the Compare column to see the difference line by line.</li>
+    budget (or the 12-mo avg) in the Compare column to see the difference line by line.</li>
+  <li><b>Check yourself against it.</b> At the top, compare the actual last 12 months with a
+    budget, or attach a budget to the Spending chart.</li>
   <li><b>Look at the long view.</b> <i>Retirement</i> shows income at each retirement age.
     <i>Spending over time</i> shows how costs change as children leave home.</li>
 </ol>
@@ -47,14 +50,25 @@ const BODY = `
   folder (or upload them under Data sources). New exports with the same layout are picked up
   automatically if the source's file pattern matches them.</p>
 
-<h3 id="h-scen">Sharing</h3>
-<p>To give someone <b>everything</b> (settings, data, budgets), use Settings › <i>Share plan</i>
-  › <i>Save plan as a file</i>. They open it from the Mac app's menu-bar icon › <i>Open Plan
-  File…</i>. That file contains your real transactions: share it privately.</p>
+<h3 id="h-strip">Summary rows</h3>
+<ul>
+  <li>The first row is always <b>the last 12 months, actual</b>: income, spending, savings,
+    annual expenses and what's left over. On its right, <i>Compare with</i> a budget (or the
+    12-mo avg) to see whether you were over (red) or under (green) it.</li>
+  <li><b>+ Show a budget</b> adds a row for any saved budget, or your current edits. Budget rows are
+    dashed and say <i>planned</i>; × hides one.</li>
+</ul>
 
 <h3 id="h-explore">Spending</h3>
 <ul>
-  <li>The chart shows each month. Click a month to filter the transactions.</li>
+  <li><b>Periods</b>: <i>All data</i> (drag across months to select some), <i>Typical year</i>
+    (each calendar month's average, with its lowest and highest year), <i>Year</i> (drag sideways
+    or use ‹ › to move it back) and <i>Selected</i>. The table, transactions and top merchants
+    follow the period shown.</li>
+  <li><b>Click a month</b> to see it day by day; <i>← Back to months</i> returns.</li>
+  <li><b>Attach a budget</b> (top right of the chart) to draw its line, see how far over or under
+    it the period was, and add a <i>vs budget</i> column to the table. It compares regular spending
+    plus annual costs: budgets have no 1-time or emergency lines.</li>
   <li><b>Spending / Credits / Both</b> chooses the rows in the table. Each row shows the monthly
     average, the lowest and the highest month. Click a category to see it in the chart.</li>
   <li><b>Credits</b> sit under the category they offset (in <i>Both</i>), or in their own list.
@@ -66,10 +80,11 @@ const BODY = `
 
 <h3 id="h-planner">Budgeting</h3>
 <table class="help-table">
-  <tr><td>Budgets bar</td><td>Save the current budget under a name, click one to load it (a
-    <b>•</b> means unsaved changes), update or delete it, or start from the averages again. A
-    budget holds only Budgeting: categories, income, savings, annual expenses and emergency costs.
-    529 cards and Retirement are not part of it.</td></tr>
+  <tr><td>Budgets bar</td><td><i>12-mo avg</i> is always first. Save the current budget under a
+    name, click one to load it (blue is the one showing; a <b>•</b> means unsaved changes), update
+    or delete it. A budget holds only Budgeting: categories, income, savings, annual expenses and
+    emergency costs. The same buttons are at the top of College 529s and Retirement: switching
+    anywhere switches everywhere.</td></tr>
   <tr><td>Planned / mo</td><td>Your budget. Starts at each category's average.</td></tr>
   <tr><td>Compare</td><td>Pick the average or any saved budget; <i>Difference</i> is planned
     minus compare (green is better).</td></tr>
@@ -87,7 +102,8 @@ const BODY = `
   <li><b>Emergency fund costs</b>: what you expect to take out of the emergency fund each month.
     Empty means the same as what goes in, so the fund holds steady; more makes it shrink, less
     makes it grow. With no emergency fund it counts as spending.</li>
-  <li><i>Try 10% less on flexible spending</i> trims the categories marked flexible.</li>
+  <li><i>Fill from Spending</i> sets Planned / mo to the averages of the period shown in Spending.
+    <i>Try 10% less on flexible spending</i> trims the categories marked flexible.</li>
 </ul>
 
 <h3 id="h-cat">Categorizing</h3>
@@ -105,16 +121,26 @@ const BODY = `
 
 <h3 id="h-college">College 529s</h3>
 <p>One card per child: school type and yearly cost, then a return / cost-growth preset you can
-  fine-tune. Each card shows how much of college is covered, the surplus or shortfall (also in
-  today's dollars) and the monthly amount that would fully fund it.</p>
+  fine-tune. The monthly contribution comes from Budgeting › Savings. Each card shows how much of
+  college is covered, the surplus or shortfall (also in today's dollars) and the monthly amount
+  that would fully fund it.</p>
+<p><b>Presets</b>: click one to set both sliders. <i>Edit presets</i> lets you change any label,
+  return or inflation, add or remove presets (the starting ones too) or keep none. The list is
+  shared by every card and saved with the plan.</p>
 
 <h3 id="h-retire">Retirement</h3>
 <ul>
   <li><b>The sliders</b>: the big one is the first partner's retirement age (the chart and table
-    follow it). Each other partner retires the same year unless you untick <i>same year as</i> and
-    set their own age.</li>
-  <li><b>Income</b>: pensions, retirement accounts, investments and Social Security, before and
-    after the retirement tax rate. Social Security that starts later is drawn as a dashed outline.</li>
+    follow it). While <i>lock: retire the same year</i> is ticked, moving either slider moves both;
+    untick it to set each partner's own age.</li>
+  <li><b>Put in by retirement</b> and <b>estimated total at retirement</b>: what goes into the
+    retirement accounts, stocks, bonds and savings account, and what it grows to.</li>
+  <li><b>Income</b>: pensions, retirement accounts, investments, the savings account and Social
+    Security, before and after the retirement tax rate. Each account has its own <i>yearly
+    withdrawal</i> %. Social Security that starts later is drawn as a dashed outline.</li>
+  <li><b>The cards on the right</b> fold with ▾ / ▸; <i>Collapse Settings</i> in the Budget bar folds
+    them all, so a change in a lower card shows in the chart without scrolling. Assumptions has
+    editable return / inflation presets, like the 529 cards.</li>
   <li><b>Comparison</b> is against <i>projected</i> retirement spending (children gone,
     retirement changes, health insurance), not today's spending.</li>
   <li>All figures are in today's dollars.</li>
@@ -123,6 +149,11 @@ const BODY = `
 <h3 id="h-future">Spending over time</h3>
 <p>Money in and out for each year, with markers when each child finishes high school and when you
   retire. Each category has an editable % for "kids gone" and "retired".</p>
+
+<h3 id="h-scen">Sharing</h3>
+<p>To give someone <b>everything</b> (settings, data, budgets), use Settings › <i>Share plan</i>
+  › <i>Save plan as a file</i>. They open it from the Mac app's menu-bar icon › <i>Open Plan
+  File…</i>. That file contains your real transactions: share it privately.</p>
 
 <h3 id="h-privacy">Privacy</h3>
 <ul>
