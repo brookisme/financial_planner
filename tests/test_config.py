@@ -104,6 +104,13 @@ def test_overflow_must_name_an_investment() -> None:
                                             'overflow_to': 'nowhere'}]})
 
 
+def test_contribution_rest_excludes_left_pct() -> None:
+    assert Config.model_validate({'investments': [{'name': 'Stocks', 'rest': True}]}) \
+        .investments[0].rest
+    with pytest.raises(ValueError, match='not both'):
+        Config.model_validate({'investments': [{'name': 'Stocks', 'rest': True, 'left_pct': 5}]})
+
+
 def test_contribution_min_above_max_is_an_error() -> None:
     with pytest.raises(ValueError, match='min_monthly'):
         Config.model_validate({'investments': [{'name': 'Stocks', 'left_pct': 10,
