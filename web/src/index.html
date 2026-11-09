@@ -44,7 +44,7 @@ try{var t=localStorage.getItem('fp-theme');if(t==='light'||t==='dark'){document.
       <span class="small muted">What your transactions show. Pick a category to highlight it month by month and see where the money went.</span>
     </div>
     <div class="panel" style="display:grid;gap:10px">
-      <div class="chart-tools"><div class="seg" id="pview" role="group" aria-label="Period"><button type="button" data-v="all">All data</button><button type="button" data-v="typical">Typical year</button><button type="button" data-v="year">Year</button><button type="button" data-v="range">Selected</button></div><span id="ptools" class="ptools"></span><span class="small muted" id="plabel"></span></div>
+      <div class="chart-tools"><div class="seg" id="pview" role="group" aria-label="Period"><button type="button" data-v="all">All data</button><button type="button" data-v="typical">Typical year</button><button type="button" data-v="year">Year</button><button type="button" data-v="range">Selected</button></div><span id="ptools" class="ptools"></span><span class="small muted" id="plabel"></span><span class="attach"><select id="attach" class="cmp-sel" aria-label="Attach a budget"></select><span class="attach-vs" id="attach-vs" aria-live="polite"></span></span></div>
       <div class="sec-head"><h3 id="chart-title">All spending by month</h3><span class="legend" id="legend"></span></div>
       <svg class="chart" id="mchart" viewBox="0 0 960 300" role="img" aria-label="Spending bar chart"></svg>
       <p class="small muted" id="chart-hint"></p>
@@ -53,7 +53,7 @@ try{var t=localStorage.getItem('fp-theme');if(t==='light'||t==='dark'){document.
       <div class="panel" style="display:grid;gap:10px;align-content:start">
         <div class="sec-head"><div class="seg" id="xmode" role="group" aria-label="Show"><button type="button" data-v="spend">Spending</button><button type="button" data-v="cred">Credits</button><button type="button" data-v="both">Both</button></div><span class="small muted" id="act-note"></span></div>
         <div class="ptable-scroll"><table class="ptable act">
-          <thead><tr><th>Category</th><th id="act-avg-head">Avg</th><th>Min</th><th>Max</th></tr></thead>
+          <thead><tr><th>Category</th><th id="act-avg-head">Avg</th><th>Min</th><th>Max</th><th id="act-vs-head" hidden>vs budget</th></tr></thead>
           <tbody id="actbody"></tbody>
         </table></div>
       </div>
@@ -125,7 +125,7 @@ try{var t=localStorage.getItem('fp-theme');if(t==='light'||t==='dark'){document.
       <h2>Retirement</h2>
       <span class="small muted" id="retire-sub">Monthly income at each retirement age, in today's dollars.</span>
     </div>
-    <div class="panel sbar bg-mirror" aria-label="Budget"><div class="sb-row"><span class="eyebrow">Budget</span><div class="chips" data-bg-tabs role="group" aria-label="Saved budgets"></div></div><p class="small muted" data-bg-state aria-live="polite"></p></div>
+    <div class="panel sbar bg-mirror" aria-label="Budget"><div class="sb-row"><span class="eyebrow">Budget</span><div class="chips" data-bg-tabs role="group" aria-label="Saved budgets"></div><button class="btn sm fold-all" type="button" id="r-fold-all">Collapse Settings</button></div><p class="small muted" data-bg-state aria-live="polite"></p></div>
     <div class="retire">
       <div class="panel" style="display:grid;gap:16px">
         <div class="ctl">
@@ -144,7 +144,6 @@ try{var t=localStorage.getItem('fp-theme');if(t==='light'||t==='dark'){document.
         <div class="ptable-scroll"><table class="rtable" id="rtable"></table></div>
       </div>
       <div class="side" id="r-side">
-        <div class="fold-all"><button class="btn sm" type="button" id="r-fold-all">Collapse all</button></div>
         <div class="panel">
           <h3>Assumptions</h3>
           <div id="r-raises" style="display:grid;gap:10px"></div>
