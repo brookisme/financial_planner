@@ -73,8 +73,9 @@ graduation month if they know it.
 - `investments`: stocks (`type: stocks`) and bonds (`type: bonds`), each with `balance` and a
   return % (0 leaves it off).
 - Every 529, savings account and investment contributes either a fixed `monthly` amount or
-  `left_pct`, a percent of what is left over each month after spending, taxes and the fixed
-  amounts, with optional `min_monthly` / `max_monthly`. Ask which the person prefers for each.
+  `left_pct`, a percent of what is left over each month after spending, annual expenses and the
+  fixed amounts, with optional `min_monthly` / `max_monthly`, or `rest: true` (an even share of
+  whatever is left after the fixed and % contributions). Ask which the person prefers for each.
 - Children's names are optional; empty names become "Child 1", "Child 2", ...
 - Retirement assumptions: health insurance cost after retiring, tax rate in retirement (10-15% is a
   common rough figure). Keep the default return / inflation unless they have a view.
