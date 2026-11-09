@@ -1422,6 +1422,13 @@
       if (tr) openRuleDialog(tr.dataset.id);
     });
     wirePointer();
+    $("attach").addEventListener("change", () => {
+      const v = stripView();
+      v.attach = $("attach").value || null;
+      v.save();
+      refresh();
+    });
+    fillAttach();
     view = MON.length > 12 ? "year" : "all";
     setMode("spend");
   }
@@ -1431,6 +1438,11 @@
       markMode();
     }
     selCat = c;
+    refresh();
+  }
+  function refreshSpending() {
+    if (!MON.length) return;
+    fillAttach();
     refresh();
   }
   function selectionAvg(c) {
@@ -1473,6 +1485,34 @@
     if (view === "year") return span(Math.max(0, yearEnd - 11), yearEnd);
     if (view === "range" && range) return span(range[0], range[1]);
     return span(0, MON.length - 1);
+  }
+  function fillAttach() {
+    const sel = $("attach");
+    const v = stripView();
+    if (v.attach && !budgetSt(v.attach)) v.attach = null;
+    sel.innerHTML = '<option value="">Attach a budget\u2026</option>' + budgetChoices().map(([id, n]) => `<option value="${esc(id)}">${esc(n)}</option>`).join("");
+    sel.value = v.attach ?? "";
+  }
+  function attached() {
+    return budgetSt(stripView().attach);
+  }
+  function planned(st, c) {
+    const d = app.d;
+    const kind = d.cats[c].kind;
+    if (kind === "spending" || kind === "credit" && d.isPlannerCredit(c)) {
+      return st.plan[d.cats[c].name] ?? 0;
+    }
+    return null;
+  }
+  function vsCell(actual, plan, moneyIn = false) {
+    if (plan === null) return "<td></td>";
+    if (Math.abs(plan) < 0.5) {
+      return `<td class="num muted"${Math.abs(actual) < 0.5 ? "" : ' title="Nothing budgeted"'}>\u2013</td>`;
+    }
+    const pct = Math.round((actual - plan) / plan * 100);
+    if (!pct) return '<td class="num muted" title="On budget">0%</td>';
+    const good = moneyIn ? pct > 0 : pct < 0;
+    return `<td class="num ${good ? "pos" : "neg"}">${pct > 0 ? "+" : "\u2212"}${Math.abs(pct)}%</td>`;
   }
   function refresh() {
     markView();
@@ -1533,12 +1573,16 @@
       return `<td${pad ? ` style="padding-left:${pad}px"` : ""}>${toggle ? `<label class="tg"><input
       type="checkbox" data-on="${esc(cat.name)}"${on[cat.name] ? " checked" : ""}>${isCredit(c) ? "\u2212 " : ""}${link}</label>` : link}</td>`;
     };
+    const st = attached();
+    const ncol = st ? 5 : 4;
+    const vs = (actual, plan, moneyIn = false) => st ? vsCell(sum(actual) / n, plan, moneyIn) : "";
     const row2 = (c, pad = 0, toggle = false, pick = true) => {
       const off = toggle && !on[d.cats[c].name];
-      return `<tr class="${[isCredit(c) ? "credit" : "", off ? "off" : "", selCat === c ? "sel" : ""].join(" ").trim()}">${nameCell(c, pad, toggle, pick)}${cells(signed(c), isCredit(c))}</tr>`;
+      return `<tr class="${[isCredit(c) ? "credit" : "", off ? "off" : "", selCat === c ? "sel" : ""].join(" ").trim()}">${nameCell(c, pad, toggle, pick)}${cells(signed(c), isCredit(c))}${vs(signed(c), st && planned(st, c), isCredit(c))}</tr>`;
     };
-    const totalRow = (lbl, series2, pick = false) => `<tr class="total${pick && selCat === null ? " sel" : ""}"><td>${pick ? `<button class="cat-link" type="button"
-      data-pick="">${esc(lbl)}</button>` : esc(lbl)}</td>${cells(series2)}</tr>`;
+    const totalRow = (lbl, series2, pick = false, plan = null, moneyIn = false) => `<tr class="total${pick && selCat === null ? " sel" : ""}"><td>${pick ? `<button class="cat-link" type="button"
+      data-pick="">${esc(lbl)}</button>` : esc(lbl)}</td>${cells(series2)}${vs(series2, plan, moneyIn)}</tr>`;
+    const planSum = (list) => st ? sum(list.map((c) => planned(st, c) ?? 0)) : null;
     const series = (list) => months.map((m) => sum(list.map((c) => (isCredit(c) ? -1 : 1) * (A[c][m] ?? 0))));
     const groups = [];
     d.regular.forEach((i) => {
@@ -1550,7 +1594,7 @@
     const credCount = [];
     if (mode !== "cred") {
       groups.forEach((g) => {
-        h += `<tr class="group"><td colspan="4">${esc(g)}</td></tr>`;
+        h += `<tr class="group"><td colspan="${ncol}">${esc(g)}</td></tr>`;
         d.regular.filter((i) => d.cats[i].group === g).sort((a, b) => d.avg(b) - d.avg(a)).forEach((i) => {
           h += row2(i);
           counted.push(i);
@@ -1562,9 +1606,9 @@
           }
         });
       });
-      h += totalRow("Regular spending", series(d.regular));
+      h += totalRow("Regular spending", series(d.regular), false, planSum(d.regular));
       if (d.costs.length) {
-        h += '<tr class="group"><td colspan="4">Annual, 1-time &amp; emergency</td></tr>';
+        h += `<tr class="group"><td colspan="${ncol}">Annual, 1-time &amp; emergency</td></tr>`;
         d.costs.forEach((i) => {
           h += row2(i, 0, true);
           if (on[d.cats[i].name]) counted.push(i);
@@ -1577,7 +1621,7 @@
         });
       }
       if (savCats.length) {
-        h += '<tr class="group"><td colspan="4">Savings &amp; transfers</td></tr>';
+        h += `<tr class="group"><td colspan="${ncol}">Savings &amp; transfers</td></tr>`;
         savCats.forEach((i) => {
           h += row2(i, 0, true, false);
           if (on[d.cats[i].name]) counted.push(i);
@@ -1587,24 +1631,34 @@
     if (mode !== "spend") {
       const loose = mode === "cred" ? d.credits : d.credits.filter((c) => !d.cats[c].offsets);
       if (loose.length) {
-        h += `<tr class="group"><td colspan="4">${mode === "cred" ? "Credits" : "Other credits"}</td></tr>`;
+        h += `<tr class="group"><td colspan="${ncol}">${mode === "cred" ? "Credits" : "Other credits"}</td></tr>`;
         loose.forEach((c) => h += row2(c, 0, true));
         credCount.push(...loose.filter((c) => on[d.cats[c].name]));
       }
     }
     if (mode === "cred") {
-      h += totalRow("All credits", series(credCount), true);
+      h += totalRow("All credits", series(credCount), true, planSum(credCount), true);
     } else {
       const spent = series(counted);
       const cred = series(credCount);
+      const planCred = credCount.filter((c) => d.isPlannerCredit(c));
+      const plan = st ? (planSum(d.regular) ?? 0) + annualMo(st) - (planSum(planCred) ?? 0) : null;
+      const like = series(counted.filter((c) => ["spending", "annual"].includes(d.cats[c].kind)));
+      const likeCred = series(planCred);
       h += totalRow(
         mode === "both" ? "Net (ticked)" : "Total (ticked)",
         spent.map((v, i) => v - cred[i]),
         true
       );
+      if (st) {
+        h += `<tr class="vsrow"><td class="small muted" colspan="4">vs budget: regular + annual
+        costs${mode === "both" ? ", after ticked credits" : ""} (budgets have no 1-time or
+        emergency lines)</td>${vsCell(sum(like.map((v, i) => v - likeCred[i])) / n, plan)}</tr>`;
+      }
     }
     $("actbody").innerHTML = h;
     $("act-avg-head").textContent = "Avg / mo";
+    $("act-vs-head").hidden = !st;
     $("act-note").textContent = `${selectionLabel()}. ${mode === "cred" ? "Money in, as positive amounts." : "Ticked rows count in the total."}`;
   }
   function buildCols() {
@@ -1696,7 +1750,11 @@
     }
     const avg = cols.length ? sum(cols.map((c) => colValue(c, avgOf))) / cols.length : 0;
     const avgName = selCat === null && mode !== "cred" ? "Avg regular" : "Avg";
-    leg += `<span><i class="ln"></i>${avgName} ${fmt(avg)}/${unit}</span>` + (view === "typical" && dayMonth === null ? "<span>\u2502 lowest \u2013 highest year</span>" : "");
+    const st = attached();
+    const monthly = !st ? null : selCat !== null ? planned(st, selCat) : mode === "cred" ? sum(credCats.map((c) => planned(st, c) ?? 0)) : sum(d.regular.map((c) => planned(st, c) ?? 0)) + annualMo(st);
+    const days = dayMonth !== null ? cols.length : 1;
+    const bud = monthly === null ? null : monthly / days;
+    leg += `<span><i class="ln"></i>${avgName} ${fmt(avg)}/${unit}</span>` + (bud === null ? "" : `<span><i class="ln bud"></i>Budget ${fmt(bud)}/${unit}</span>`) + (view === "typical" && dayMonth === null ? "<span>\u2502 lowest \u2013 highest year</span>" : "");
     title += dayMonth !== null ? ` by day, ${LBL[dayMonth]}` : view === "typical" ? ", typical year" : " by month";
     $("chart-title").textContent = title;
     $("legend").innerHTML = leg;
@@ -1704,7 +1762,22 @@
     const spreads = cols.map((c) => dayMonth === null ? colSpread(c, upCats) : null);
     const upT = cols.map((c) => sum(up.map((s) => Math.max(colValue(c, s.cats), 0))));
     const dnT = cols.map((c) => sum(down.map((s) => Math.max(colValue(c, s.cats), 0))));
-    const maxU = Math.max(...upT, ...spreads.map((s) => s ? s[1] : 0), avg, 1);
+    const maxU = Math.max(...upT, ...spreads.map((s) => s ? s[1] : 0), avg, bud ?? 0, 1);
+    const moneyIn = selCat !== null ? isCredit(selCat) : mode === "cred";
+    const vsCats = selCat === null && mode !== "cred" ? [...d.regular, ...d.annual] : upCats;
+    const vsT = cols.map((c) => colValue(c, vsCats));
+    const actualMo = dayMonth !== null ? sum(vsT) : cols.length ? sum(vsT) / cols.length : 0;
+    const vsEl = $("attach-vs");
+    if (monthly === null || Math.abs(monthly) < 0.5) {
+      vsEl.textContent = st ? "Nothing budgeted for this" : "";
+      vsEl.className = "attach-vs";
+    } else {
+      const diff = actualMo - monthly;
+      const pct = Math.round(Math.abs(diff) / monthly * 100);
+      const over = diff > 0;
+      vsEl.textContent = Math.abs(diff) < 0.5 ? "On budget" : `${fmt(Math.abs(diff))}/mo ${over ? "over" : "under"} budget (${pct}%)${dayMonth !== null ? ` in ${LBL[dayMonth]}` : ""}`;
+      vsEl.className = `attach-vs ${Math.abs(diff) < 0.5 ? "" : over !== moneyIn ? "over" : "under"}`;
+    }
     const maxD = Math.max(...dnT, 0);
     const step = niceStep(maxU + maxD);
     const topU = Math.ceil(maxU / step) * step;
@@ -1758,6 +1831,9 @@
       const lab = k % every === 0 || cols.length <= 14 ? `<text x="${L + k * bw + bw / 2}" y="${H - 10}" text-anchor="middle">${esc(col.label)}</text>` : "";
       g += `<g class="m" data-k="${k}" data-tip="${tip.replace(/"/g, "&quot;")}">${bars}<rect class="hit" x="${L + k * bw}" y="${T}" width="${bw}" height="${ph}"/>${lab}</g>`;
     });
+    if (bud !== null) {
+      g += `<line class="budline" x1="${L}" x2="${W - R}" y1="${y(bud)}" y2="${y(bud)}"/>`;
+    }
     g += `<line class="avgline" x1="${L}" x2="${W - R}" y1="${y(avg)}" y2="${y(avg)}"/><rect id="brush" class="brush" x="0" y="${T}" width="0" height="${ph}" visibility="hidden"/>`;
     svg.innerHTML = g;
     svg.dataset.l = String(L);
@@ -2217,20 +2293,21 @@
   function refreshStrip() {
     const d = app.d;
     const list = savedBudgets();
+    const choices = budgetChoices();
     const view2 = stripView();
-    view2.rows = view2.rows.filter((id) => id === CURRENT || list.some((b) => b.id === id));
-    if (view2.cmp && !list.some((b) => b.id === view2.cmp)) view2.cmp = null;
+    view2.rows = view2.rows.filter((id) => id === CURRENT || budgetSt(id));
+    if (view2.cmp && !budgetSt(view2.cmp)) view2.cmp = null;
     const actual = budget(d, app.defs.st);
     const planOf = (id) => {
       if (id === CURRENT) return ["Current edits in Budgeting", app.S.st];
-      const b = list.find((x) => x.id === id);
-      return [`Budget \u201C${b.name}\u201D`, rebaseBudget(app.defs.st, b.st, b.base)];
+      if (id === AVG) return [`${d.n}-month average`, app.defs.st];
+      return [`Budget \u201C${list.find((x) => x.id === id).name}\u201D`, budgetSt(id)];
     };
-    const cmpSel = list.length ? `<label class="eyebrow" for="strip-cmp">Compare with</label><select
-    id="strip-cmp" class="cmp-sel" data-cmp><option value="">Choose a budget</option>${list.map((b) => `<option value="${esc(b.id)}"${b.id === view2.cmp ? " selected" : ""}>${esc(b.name)}</option>`).join("")}</select>` : "";
+    const cmpSel = `<label class="eyebrow" for="strip-cmp">Compare with</label><select
+    id="strip-cmp" class="cmp-sel" data-cmp><option value="">Choose a budget</option>${choices.map(([v, n]) => `<option value="${esc(v)}"${v === view2.cmp ? " selected" : ""}>${esc(n)}</option>`).join("")}</select>`;
     let h = `<div class="strip-head"><span class="eyebrow">Last ${d.n} months \xB7 actual</span><span
-    class="small muted">from your transactions</span></div>` + row(actual, "actual", view2.cmp ? vsTile(actual, planOf(view2.cmp)[1], cmpSel) : list.length ? `<div class="vs">${cmpSel}<span class="small muted">to see if you were over
-            or under it</span></div>` : "");
+    class="small muted">from your transactions</span></div>` + row(actual, "actual", view2.cmp ? vsTile(actual, planOf(view2.cmp)[1], cmpSel) : `<div class="vs">${cmpSel}<span class="small muted">to see if you were over or under
+            it</span></div>`);
     view2.rows.forEach((id, i) => {
       const [name, st] = planOf(id);
       const b = budget(d, st);
@@ -2239,9 +2316,9 @@
     });
     const options = [
       ...view2.rows.includes(CURRENT) ? [] : [[CURRENT, "Current edits"]],
-      ...list.filter((b) => !view2.rows.includes(b.id)).map((b) => [b.id, b.name])
+      ...choices.filter(([v]) => !view2.rows.includes(v))
     ];
-    if (list.length && options.length) {
+    if (options.length) {
       h += `<div class="strip-add"><select class="cmp-sel" data-add aria-label="Show a budget"><option
       value="">+ Show a budget</option>${options.map(([v, n]) => `<option value="${esc(v)}">${esc(n)}</option>`).join("")}</select></div>`;
     }
@@ -2284,12 +2361,21 @@
   function savedBudgets() {
     return state.list;
   }
+  var AVG = "__avg";
+  function budgetChoices() {
+    return [[AVG, `${app.d.n}-mo avg`], ...state.list.map((b) => [b.id, b.name])];
+  }
+  function budgetSt(id) {
+    if (id === AVG) return app.defs.st;
+    const b = state.list.find((x) => x.id === id);
+    return b ? stOf(b) : null;
+  }
   function stripView() {
-    state.view ?? (state.view = { cmp: null, rows: [] });
+    state.view ?? (state.view = { cmp: null, rows: [], attach: null });
     return Object.assign(state.view, { save: () => send(
       "PUT",
       "/api/state/budgets",
-      { ...state, view: { cmp: state.view.cmp, rows: state.view.rows } }
+      { ...state, view: plainView() }
     ).catch(() => {
     }) });
   }
@@ -2298,12 +2384,13 @@
     state = {
       list: saved2.budgets?.list ?? [],
       active: saved2.budgets?.active ?? null,
-      view: saved2.budgets?.view ?? { cmp: null, rows: [] }
+      view: { cmp: null, rows: [], attach: null, ...saved2.budgets?.view }
     };
     wireBar();
     onChange(touch);
     renderBar();
     refreshCompare();
+    refreshSpending();
   }
   var state = { list: [], active: null };
   var pendingSwitch = null;
@@ -2315,14 +2402,19 @@
   function dirtyFrom(b) {
     return diffBudget(app.d, stOf(b), app.S.st).length > 0;
   }
+  function plainView() {
+    const v = state.view;
+    return v && { cmp: v.cmp, rows: v.rows, attach: v.attach };
+  }
   function persist() {
-    send("PUT", "/api/state/budgets", {
-      ...state,
-      view: state.view && { cmp: state.view.cmp, rows: state.view.rows }
-    }).catch(() => {
+    send("PUT", "/api/state/budgets", { ...state, view: plainView() }).catch(() => {
     });
     refreshCompare();
     refreshStrip();
+    refreshSpending();
+  }
+  function offAvg() {
+    return diffBudget(app.d, app.defs.st, app.S.st).length > 0;
   }
   function apply(st) {
     app.S.st = clone(st);
@@ -2338,11 +2430,13 @@
   function renderBar() {
     const a = active();
     const dirty2 = a ? dirtyFrom(a) : null;
-    const chips = state.list.map((b) => `<button type="button" class="chip" data-id="${esc(b.id)}" aria-pressed="${b.id === state.active}">${esc(b.name)}${b.id === state.active && dirty2 ? " \u2022" : ""}</button>`).join("");
+    const avgOn = !a && !offAvg();
+    const chips = `<button type="button" class="chip" data-id="${AVG}" aria-pressed="${avgOn}">${app.d.n}-mo avg</button>` + state.list.map((b) => `<button type="button" class="chip"
+      data-id="${esc(b.id)}" aria-pressed="${b.id === state.active}">${esc(b.name)}${b.id === state.active && dirty2 ? " \u2022" : ""}</button>`).join("");
     document.querySelectorAll("[data-bg-tabs]").forEach((el) => {
-      el.innerHTML = chips || (el.id === "bg-tabs" ? '<span class="small muted">No saved budgets yet. Name this one and save it.</span>' : '<span class="small muted">No saved budgets yet. Save one in <a href="#budget">Budgeting</a>.</span>');
+      el.innerHTML = chips;
     });
-    const line = pendingSwitch ? "Unsaved changes will be lost. Click the budget again to switch." : a ? dirty2 ? `Unsaved changes to "${a.name}"` : `Showing "${a.name}"` : "Not saved as a budget yet";
+    const line = pendingSwitch ? "Unsaved changes will be lost. Click the budget again to switch." : a && dirty2 ? `Unsaved changes to "${a.name}"` : !a && !avgOn ? "Unsaved changes (not saved as a budget)" : "";
     document.querySelectorAll("[data-bg-state]").forEach((el) => {
       el.textContent = line;
     });
@@ -2357,18 +2451,18 @@
     document.querySelectorAll("[data-bg-tabs] button").forEach((btn) => {
       btn.addEventListener("click", () => {
         const id = btn.dataset.id;
-        if (id === state.active) return;
+        if (btn.getAttribute("aria-pressed") === "true") return;
         const cur = active();
-        const dirtyNow = cur ? dirtyFrom(cur) : !state.list.some((b) => !dirtyFrom(b)) && diffBudget(app.d, app.defs.st, app.S.st).length > 0;
+        const dirtyNow = cur ? dirtyFrom(cur) : !state.list.some((b) => !dirtyFrom(b)) && offAvg();
         if (dirtyNow && pendingSwitch !== id) {
           pendingSwitch = id;
           renderBar();
           return;
         }
         pendingSwitch = null;
-        state.active = id;
+        state.active = id === AVG ? null : id;
         persist();
-        apply(stOf(state.list.find((b) => b.id === id)));
+        apply(budgetSt(id));
       });
     });
   }
@@ -2790,13 +2884,14 @@
   var TOPICS = [
     ["h-start", "Quick start"],
     ["h-setup", "Setting up"],
+    ["h-strip", "Summary rows"],
     ["h-explore", "Spending"],
     ["h-planner", "Budgeting"],
-    ["h-scen", "Sharing"],
     ["h-cat", "Categorizing"],
     ["h-college", "College 529s"],
     ["h-retire", "Retirement"],
     ["h-future", "Spending over time"],
+    ["h-scen", "Sharing"],
     ["h-privacy", "Privacy"],
     ["h-faq", "Questions"]
   ];
@@ -2806,9 +2901,11 @@
   <li><b>Look at your spending.</b> <i>Spending</i> shows what your transactions say: each
     category's monthly average, lowest and highest month, and every transaction behind it.</li>
   <li><b>Make a budget.</b> In <i>Budgeting</i> every category starts at its average. Type a new
-    number and the strip at the top updates. Changed boxes turn blue.</li>
+    number to try a change. Changed boxes turn blue.</li>
   <li><b>Save it.</b> Name it in the Budgets bar and click <i>Save as new</i>. Pick any saved
-    budget (or the average) in the Compare column to see the difference line by line.</li>
+    budget (or the 12-mo avg) in the Compare column to see the difference line by line.</li>
+  <li><b>Check yourself against it.</b> At the top, compare the actual last 12 months with a
+    budget, or attach a budget to the Spending chart.</li>
   <li><b>Look at the long view.</b> <i>Retirement</i> shows income at each retirement age.
     <i>Spending over time</i> shows how costs change as children leave home.</li>
 </ol>
@@ -2836,14 +2933,25 @@
   folder (or upload them under Data sources). New exports with the same layout are picked up
   automatically if the source's file pattern matches them.</p>
 
-<h3 id="h-scen">Sharing</h3>
-<p>To give someone <b>everything</b> (settings, data, budgets), use Settings \u203A <i>Share plan</i>
-  \u203A <i>Save plan as a file</i>. They open it from the Mac app's menu-bar icon \u203A <i>Open Plan
-  File\u2026</i>. That file contains your real transactions: share it privately.</p>
+<h3 id="h-strip">Summary rows</h3>
+<ul>
+  <li>The first row is always <b>the last 12 months, actual</b>: income, spending, savings,
+    annual expenses and what's left over. On its right, <i>Compare with</i> a budget (or the
+    12-mo avg) to see whether you were over (red) or under (green) it.</li>
+  <li><b>+ Show a budget</b> adds a row for any saved budget, or your current edits. Budget rows are
+    dashed and say <i>planned</i>; \xD7 hides one.</li>
+</ul>
 
 <h3 id="h-explore">Spending</h3>
 <ul>
-  <li>The chart shows each month. Click a month to filter the transactions.</li>
+  <li><b>Periods</b>: <i>All data</i> (drag across months to select some), <i>Typical year</i>
+    (each calendar month's average, with its lowest and highest year), <i>Year</i> (drag sideways
+    or use \u2039 \u203A to move it back) and <i>Selected</i>. The table, transactions and top merchants
+    follow the period shown.</li>
+  <li><b>Click a month</b> to see it day by day; <i>\u2190 Back to months</i> returns.</li>
+  <li><b>Attach a budget</b> (top right of the chart) to draw its line, see how far over or under
+    it the period was, and add a <i>vs budget</i> column to the table. It compares regular spending
+    plus annual costs: budgets have no 1-time or emergency lines.</li>
   <li><b>Spending / Credits / Both</b> chooses the rows in the table. Each row shows the monthly
     average, the lowest and the highest month. Click a category to see it in the chart.</li>
   <li><b>Credits</b> sit under the category they offset (in <i>Both</i>), or in their own list.
@@ -2855,10 +2963,11 @@
 
 <h3 id="h-planner">Budgeting</h3>
 <table class="help-table">
-  <tr><td>Budgets bar</td><td>Save the current budget under a name, click one to load it (a
-    <b>\u2022</b> means unsaved changes), update or delete it, or start from the averages again. A
-    budget holds only Budgeting: categories, income, savings, annual expenses and emergency costs.
-    529 cards and Retirement are not part of it.</td></tr>
+  <tr><td>Budgets bar</td><td><i>12-mo avg</i> is always first. Save the current budget under a
+    name, click one to load it (blue is the one showing; a <b>\u2022</b> means unsaved changes), update
+    or delete it. A budget holds only Budgeting: categories, income, savings, annual expenses and
+    emergency costs. The same buttons are at the top of College 529s and Retirement: switching
+    anywhere switches everywhere.</td></tr>
   <tr><td>Planned / mo</td><td>Your budget. Starts at each category's average.</td></tr>
   <tr><td>Compare</td><td>Pick the average or any saved budget; <i>Difference</i> is planned
     minus compare (green is better).</td></tr>
@@ -2876,7 +2985,8 @@
   <li><b>Emergency fund costs</b>: what you expect to take out of the emergency fund each month.
     Empty means the same as what goes in, so the fund holds steady; more makes it shrink, less
     makes it grow. With no emergency fund it counts as spending.</li>
-  <li><i>Try 10% less on flexible spending</i> trims the categories marked flexible.</li>
+  <li><i>Fill from Spending</i> sets Planned / mo to the averages of the period shown in Spending.
+    <i>Try 10% less on flexible spending</i> trims the categories marked flexible.</li>
 </ul>
 
 <h3 id="h-cat">Categorizing</h3>
@@ -2894,16 +3004,26 @@
 
 <h3 id="h-college">College 529s</h3>
 <p>One card per child: school type and yearly cost, then a return / cost-growth preset you can
-  fine-tune. Each card shows how much of college is covered, the surplus or shortfall (also in
-  today's dollars) and the monthly amount that would fully fund it.</p>
+  fine-tune. The monthly contribution comes from Budgeting \u203A Savings. Each card shows how much of
+  college is covered, the surplus or shortfall (also in today's dollars) and the monthly amount
+  that would fully fund it.</p>
+<p><b>Presets</b>: click one to set both sliders. <i>Edit presets</i> lets you change any label,
+  return or inflation, add or remove presets (the starting ones too) or keep none. The list is
+  shared by every card and saved with the plan.</p>
 
 <h3 id="h-retire">Retirement</h3>
 <ul>
   <li><b>The sliders</b>: the big one is the first partner's retirement age (the chart and table
-    follow it). Each other partner retires the same year unless you untick <i>same year as</i> and
-    set their own age.</li>
-  <li><b>Income</b>: pensions, retirement accounts, investments and Social Security, before and
-    after the retirement tax rate. Social Security that starts later is drawn as a dashed outline.</li>
+    follow it). While <i>lock: retire the same year</i> is ticked, moving either slider moves both;
+    untick it to set each partner's own age.</li>
+  <li><b>Put in by retirement</b> and <b>estimated total at retirement</b>: what goes into the
+    retirement accounts, stocks, bonds and savings account, and what it grows to.</li>
+  <li><b>Income</b>: pensions, retirement accounts, investments, the savings account and Social
+    Security, before and after the retirement tax rate. Each account has its own <i>yearly
+    withdrawal</i> %. Social Security that starts later is drawn as a dashed outline.</li>
+  <li><b>The cards on the right</b> fold with \u25BE / \u25B8; <i>Collapse Settings</i> in the Budget bar folds
+    them all, so a change in a lower card shows in the chart without scrolling. Assumptions has
+    editable return / inflation presets, like the 529 cards.</li>
   <li><b>Comparison</b> is against <i>projected</i> retirement spending (children gone,
     retirement changes, health insurance), not today's spending.</li>
   <li>All figures are in today's dollars.</li>
@@ -2912,6 +3032,11 @@
 <h3 id="h-future">Spending over time</h3>
 <p>Money in and out for each year, with markers when each child finishes high school and when you
   retire. Each category has an editable % for "kids gone" and "retired".</p>
+
+<h3 id="h-scen">Sharing</h3>
+<p>To give someone <b>everything</b> (settings, data, budgets), use Settings \u203A <i>Share plan</i>
+  \u203A <i>Save plan as a file</i>. They open it from the Mac app's menu-bar icon \u203A <i>Open Plan
+  File\u2026</i>. That file contains your real transactions: share it privately.</p>
 
 <h3 id="h-privacy">Privacy</h3>
 <ul>
@@ -3164,7 +3289,7 @@
     };
     const allBtn = $("r-fold-all");
     const markAll = () => {
-      allBtn.textContent = panels.every((p) => p.classList.contains("folded")) ? "Expand all" : "Collapse all";
+      allBtn.textContent = panels.every((p) => p.classList.contains("folded")) ? "Expand Settings" : "Collapse Settings";
     };
     panels.forEach((el) => {
       el.classList.add("foldable");
@@ -3178,7 +3303,7 @@
       });
     });
     allBtn.addEventListener("click", () => {
-      const fold = allBtn.textContent === "Collapse all";
+      const fold = allBtn.textContent === "Collapse Settings";
       panels.forEach((el) => set(el, fold));
       store();
       markAll();
