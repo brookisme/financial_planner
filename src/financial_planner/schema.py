@@ -18,7 +18,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 #
 # CONSTANTS
 #
-CATEGORY_KINDS: tuple[str, ...] = ('spending', 'one_time', 'credit', 'ignore')
+CATEGORY_KINDS: tuple[str, ...] = ('spending', 'annual', 'one_time', 'emergency', 'credit',
+                                   'ignore')
+COST_KINDS: tuple[str, ...] = ('annual', 'one_time', 'emergency')
 RULE_OPERATIONS: tuple[str, ...] = ('row', 'equals', 'contains', 'matches', 'similar_to')
 YEAR_MONTH_RE: re.Pattern[str] = re.compile(r'^\d{4}-(0[1-9]|1[0-2])$')
 DEFAULT_SCHOOLS: dict[str, dict[str, Any]] = {
@@ -147,15 +149,39 @@ class Partner(_Model):
     accounts: list[Account] = Field(default_factory=list)
 
 
-class College529(_Model):
-    """A child's 529 college savings plan.
+class Contribution(_Model):
+    """How much goes into a 529, savings account or investment each month.
+
+    Either a fixed amount (``monthly``) or a share of what is left over each month after spending,
+    taxes and every fixed contribution (``left_pct``), optionally kept between a floor and a cap.
+
+    Attributes:
+        monthly: Fixed amount per month (used when ``left_pct`` is empty).
+        left_pct: Percent of the monthly left-over to put in instead of a fixed amount.
+        min_monthly: With ``left_pct``: put in at least this much (even when nothing is left).
+        max_monthly: With ``left_pct``: put in at most this much.
+    """
+    monthly: float = 0
+    left_pct: Optional[float] = Field(None, ge=0, le=100)
+    min_monthly: Optional[float] = Field(None, ge=0)
+    max_monthly: Optional[float] = Field(None, ge=0)
+
+    @model_validator(mode='after')
+    def _check_range(self) -> 'Contribution':
+        """Require min_monthly <= max_monthly."""
+        lo, hi = self.min_monthly, self.max_monthly
+        if lo is not None and hi is not None and lo > hi:
+            raise ValueError('min_monthly must not be more than max_monthly')
+        return self
+
+
+class College529(Contribution):
+    """A child's 529 college savings plan. Contributions stop at high-school graduation.
 
     Attributes:
         balance: Balance today.
-        monthly: Contribution per month until high-school graduation.
     """
     balance: float = 0
-    monthly: float = 0
 
 
 class Child(_Model):
@@ -163,7 +189,7 @@ class Child(_Model):
 
     Attributes:
         id: Short stable key.
-        name: Display name.
+        name: Display name (defaults to "Child 1", "Child 2", ... by position).
         age: Age today.
         hs_graduation: High-school graduation as YYYY-MM. Estimated from age if empty.
         college_529: 529 plan, if any.
@@ -171,7 +197,7 @@ class Child(_Model):
         note: Extra text for the child's card.
     """
     id: Optional[str] = None
-    name: str
+    name: Optional[str] = None
     age: float = Field(..., ge=0, le=30)
     hs_graduation: Optional[str] = None
     college_529: College529 = Field(default_factory=College529)
@@ -199,36 +225,48 @@ class Household(_Model):
     children: list[Child] = Field(default_factory=list)
 
 
-class SavingsAccount(_Model):
-    """Money moved to savings every month (shown in the planner's Savings box).
+class SavingsAccount(Contribution):
+    """A savings account or emergency fund (shown in the planner's Savings box).
 
     Attributes:
         id: Short stable key.
         name: Label.
-        monthly: Amount per month.
+        type: ``savings`` (a savings account) or ``emergency`` (an emergency fund: costs in
+            ``emergency`` categories are paid from it).
+        balance: Balance today.
+        max_balance: Optional target. Once the balance reaches it, contributions go to the
+            ``overflow_to`` investment instead.
+        overflow_to: Investment id that receives contributions above ``max_balance`` (default: the
+            first investment; with no investments they stay in the budget's left-over).
+        return_pct: Yearly interest.
         stops_at_retirement: Stop contributions at retirement.
     """
     id: Optional[str] = None
     name: str
-    monthly: float = 0
+    type: Literal['savings', 'emergency'] = 'savings'
+    balance: float = 0
+    max_balance: Optional[float] = Field(None, ge=0)
+    overflow_to: Optional[str] = None
+    return_pct: float = 0
     stops_at_retirement: bool = True
 
 
-class Investment(_Model):
-    """A brokerage / stock account that grows at its own rate and becomes retirement income.
+class Investment(Contribution):
+    """A stock or bond account that grows at its own rate and becomes retirement income.
+    Contributions stop at retirement.
 
     Attributes:
         id: Short stable key.
         name: Label.
+        type: ``stocks`` or ``bonds``.
         balance: Balance today.
         return_pct: Yearly return (0 = off).
-        monthly: Added each month until retirement.
     """
     id: Optional[str] = None
     name: str = 'Investments'
+    type: Literal['stocks', 'bonds'] = 'stocks'
     balance: float = 0
     return_pct: float = 0
-    monthly: float = 0
 
 
 class Preset(_Model):
@@ -368,23 +406,25 @@ class Category(_Model):
 
     Attributes:
         name: Name (unique).
-        kind: ``spending`` (regular monthly), ``one_time`` (kept out of averages, optional toggle),
-            ``credit`` (money in that can offset spending) or ``ignore`` (transfers, payments,
-            paychecks, savings: never counted).
+        kind: ``spending`` (regular monthly), ``annual`` (yearly expenses such as taxes or
+            insurance), ``one_time`` (1-time purchases), ``emergency`` (paid from the emergency
+            fund), ``credit`` (money in that can offset spending) or ``ignore`` (transfers,
+            payments, paychecks, savings: never counted). Annual, one_time and emergency costs are
+            kept out of the regular averages and each has a toggle.
         group: Planner group heading, e.g. Essentials / Flexible.
         flexible: Included in "try 10% less on flexible spending".
         kids_gone_pct: Change once all children have left home.
         retired_pct: Change after retiring (applied on top of kids_gone_pct).
-        default_on: For one_time / credit: counted by default.
-        in_retirement: For one_time / credit: continues after retiring.
-        tax: For one_time: belongs in the "Tax set-aside" total.
-        offsets: For credit: a spending category it's shown under (a reimbursement) or a one_time
+        default_on: For costs / credits: counted by default.
+        in_retirement: For costs / credits: continues after retiring.
+        tax: For annual / one_time: belongs in the "Tax set-aside" total.
+        offsets: For credit: a spending category it's shown under (a reimbursement) or a cost
             category it reduces (e.g. a federal refund under income tax).
         label: Text for the planner toggle.
         note: Small print next to the toggle / in the help.
     """
     name: str
-    kind: Literal['spending', 'one_time', 'credit', 'ignore'] = 'spending'
+    kind: Literal['spending', 'annual', 'one_time', 'emergency', 'credit', 'ignore'] = 'spending'
     group: str = 'Other'
     flexible: bool = False
     kids_gone_pct: float = 0
@@ -460,8 +500,8 @@ class Config(_Model):
         plan: Titles and time window.
         household: Partners and children.
         other_income_monthly: Other take-home income per month.
-        savings: Monthly savings transfers.
-        investments: Brokerage / stock accounts.
+        savings: Savings accounts and emergency funds.
+        investments: Stock and bond accounts.
         assumptions: Model assumptions.
         sources: CSV sources.
         categories: Categories.
@@ -484,6 +524,9 @@ class Config(_Model):
     @model_validator(mode='after')
     def _fill_ids_and_check(self) -> 'Config':
         """Give people and accounts stable ids and check cross references."""
+        for i, child in enumerate(self.household.children):
+            if not child.name:
+                child.name = f'Child {i + 1}'
         _assign_ids(self.household.partners, 'partner')
         _assign_ids(self.household.children, 'child')
         _assign_ids(self.savings, 'savings')
@@ -496,9 +539,14 @@ class Config(_Model):
         for cat in self.categories:
             if cat.offsets and cat.kind != 'credit':
                 raise ValueError(f'category {cat.name!r}: only credit categories can offset')
-            if cat.offsets and kinds.get(cat.offsets) not in ('spending', 'one_time'):
+            if cat.offsets and kinds.get(cat.offsets) not in ('spending', *COST_KINDS):
                 raise ValueError(f'category {cat.name!r} offsets {cat.offsets!r}, which is not '
-                                 'a spending or one_time category')
+                                 'a spending, annual, one_time or emergency category')
+        investments = [v.id for v in self.investments]
+        for acct in self.savings:
+            if acct.overflow_to and acct.overflow_to not in investments:
+                raise ValueError(f'savings {acct.name!r}: overflow_to {acct.overflow_to!r} is not '
+                                 f'an investment id (known: {", ".join(investments) or "none"})')
         schools = self.assumptions.college.schools
         for child in self.household.children:
             if child.school not in schools:
