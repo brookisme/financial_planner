@@ -7,8 +7,9 @@
 
 import {$, $in, app, changed, hideTip, num, onChange, showTip} from '../app';
 import {esc, fk, fmt, niceStep, sum} from '../format';
-import {ageWhen, budget, clone, type IncomePart, overflowTarget, retirementIncome, retireYear,
-        spendAt, spendToday, ssFactor} from '../model';
+import {ageWhen, budget, clone, drawPct, type IncomePart, overflowTarget, retirementIncome,
+        retireSavings, retireYear, spendAt, spendToday, ssFactor} from '../model';
+import {presetPicker} from './presets';
 
 //
 // CONSTANTS
@@ -60,6 +61,7 @@ export function fillRetire(): void {
   document.querySelectorAll<HTMLInputElement>('[data-r]').forEach((el) => {
     const v = getR(el.dataset.r!);
     if (el.type === 'checkbox') el.checked = !!v;
+    else if (el.dataset.r!.startsWith('draw|')) el.value = String(v ?? rs.wd);
     else el.value = v == null ? '' : String(v);
   });
   document.querySelectorAll<HTMLSelectElement>('select[data-claim]').forEach((el) => {
@@ -73,6 +75,7 @@ export function fillRetire(): void {
 //
 let lo = 55;
 let hi = 70;
+let markPreset: () => void = () => {};
 
 /** Retirement-age controls for partners after the first. */
 function buildOthers(): void {
@@ -125,6 +128,7 @@ function drawOthers(): void {
 function partColor(x: IncomePart): string {
   if (x.kind === 'pension') return '--r1';
   if (x.kind === 'investment') return '--r5';
+  if (x.kind === 'savings') return '--onetime';
   if (x.kind === 'ss') return '--r4';
   return x.partner === app.d.primary.id ? '--r2' : '--r3';
 }
@@ -148,6 +152,13 @@ function setR(path: string, v: unknown): void {
 /** Splits "pen|a:0|est|55" style paths. */
 function splitPath(path: string): string[] {
   return path.split('|');
+}
+
+/** A yearly-withdrawal slider for one account (key like acct:a:0, inv:stocks, sav:savings). */
+function drawCtl(key: string): string {
+  return `<div class="ctl"><label>Yearly withdrawal <span class="small muted">for living
+    expenses</span></label><span class="num" data-drawv="${esc(key)}"></span><input type="range"
+    min="2" max="8" step="0.25" data-r="draw|${esc(key)}" aria-label="Yearly withdrawal"></div>`;
 }
 
 /** A numeric input bound to a settings path. */
@@ -180,19 +191,30 @@ function buildPanels(): void {
       h += `<div class="panel" data-pane="acct|${esc(key)}|on"><label class="toggle"><input
         type="checkbox" data-r="acct|${esc(key)}|on"><h3>${esc(ac.name)} <span class="small muted">${
         esc(p.name)}</span></h3></label>${numInput(`acct|${key}|bal`, 'Balance today', 1000, true)}${
-        numInput(`acct|${key}|monthly`, 'Adding per month')}<p class="small muted">Grows at the
-        return rate; contributions continue until retirement.</p></div>`;
+        numInput(`acct|${key}|monthly`, 'Adding per month')}${drawCtl(`acct:${key}`)}<p
+        class="small muted">Grows at the return rate; contributions continue until retirement.</p></div>`;
     });
   });
   d.p.investments.forEach((v) => {
     h += `<div class="panel" id="pn-inv-${esc(v.id)}"><h3>${esc(v.name)}</h3>${
         numInput(`inv|${v.id}|bal`, 'Balance today', 1000, true)}
       <div class="row"><span>Adding per month</span><span><span class="num" id="r-ic-${
-        esc(v.id)}"></span> <a class="small" href="#planner">set in the planner</a></span></div>
+        esc(v.id)}"></span> <a class="small" href="#budget">set in Budgeting</a></span></div>
       <div class="ctl"><label>Return on this account</label><span class="num" id="r-ir-${
         esc(v.id)}"></span><input type="range" min="0" max="10" step="0.5" data-r="inv|${
-        esc(v.id)}|ret"></div>
+        esc(v.id)}|ret"></div>${drawCtl(`inv:${v.id}`)}
       <p class="small muted" id="r-inote-${esc(v.id)}"></p></div>`;
+  });
+  retireSavings(d).forEach((sv) => {
+    h += `<div class="panel" id="pn-sav-${esc(sv.id)}"><h3>${esc(sv.name)}</h3>
+      <div class="row"><span>Balance today</span><span class="num">${fmt(sv.balance)}</span></div>
+      <div class="row"><span>Adding per month</span><span><span class="num" id="r-sc-${
+        esc(sv.id)}"></span> <a class="small" href="#budget">set in Budgeting</a></span></div>
+      <div class="row"><span>Interest</span><span class="num">${sv.return_pct}%</span></div>
+      ${drawCtl(`sav:${sv.id}`)}
+      <p class="small muted">${sv.stops_at_retirement ? 'Contributions stop at retirement. ' :
+        ''}Its balance at retirement becomes monthly income at its withdrawal rate. Balance and
+        interest are set in Settings › Savings &amp; income.</p></div>`;
   });
   if (d.partners.length) {
     h += `<div class="panel" data-pane="ss"><label class="toggle"><input type="checkbox"
@@ -236,19 +258,13 @@ function buildAssumptions(): void {
       changed();
     });
   });
-  const presets = d.p.assumptions.retirement.presets;
-  $('r-scen').innerHTML = Object.entries(presets).map(([k, p]) => `<label><input type="checkbox"
-    data-rp="${esc(k)}">${esc(p.name)} <span class="small muted">${p.return_pct}% / ${
-    p.inflation_pct}%</span></label>`).join('');
-  $('r-scen').querySelectorAll<HTMLInputElement>('[data-rp]').forEach((cb) => {
-    cb.addEventListener('change', () => {
-      const p = presets[cb.dataset.rp!];
-      app.S.rs.ret = p.return_pct;
-      app.S.rs.inf = p.inflation_pct;
-      fillRetire();
-      changed();
-    });
-  });
+  markPreset = presetPicker($('r-scen'), 'retire', () => [app.S.rs.ret, app.S.rs.inf],
+                            (ret, inf) => {
+                              app.S.rs.ret = ret;
+                              app.S.rs.inf = inf;
+                              fillRetire();
+                              changed();
+                            });
   ([['r-ret', 'ret'], ['r-inf', 'inf'], ['r-wd', 'wd']] as const).forEach(([id, key]) => {
     $in(id).addEventListener('input', () => {
       app.S.rs[key] = +$in(id).value;
@@ -275,10 +291,15 @@ function drawRetire(): void {
     const r = document.querySelector<HTMLInputElement>(`[data-r="raise|${CSS.escape(p.id)}"]`);
     if (r) r.value = String(rs.raise[p.id] ?? 0);
   });
-  const presets = d.p.assumptions.retirement.presets;
-  document.querySelectorAll<HTMLInputElement>('[data-rp]').forEach((cb) => {
-    const p = presets[cb.dataset.rp!];
-    cb.checked = p.return_pct === rs.ret && p.inflation_pct === rs.inf;
+  markPreset();
+  document.querySelectorAll<HTMLElement>('[data-drawv]').forEach((el) => {
+    const key = el.dataset.drawv!;
+    el.textContent = `${drawPct(rs, key)}%`;
+    const r = document.querySelector<HTMLInputElement>(`[data-r="draw|${CSS.escape(key)}"]`);
+    if (r && document.activeElement !== r) r.value = String(drawPct(rs, key));
+  });
+  retireSavings(d).forEach((sv) => {
+    $(`r-sc-${sv.id}`).textContent = fmt(budget(d, S.st).amt[`sav:${sv.id}`] ?? 0);
   });
   d.p.investments.forEach((v) => {
     const st = rs.inv[v.id];
@@ -289,11 +310,11 @@ function drawRetire(): void {
     $(`r-ic-${v.id}`).textContent = fmt(monthly);
     $(`r-ir-${v.id}`).textContent = `${st.ret}%`;
     $(`r-inote-${v.id}`).textContent = !on ?
-        'Off until you enter a balance here or a monthly amount in the planner.' :
+        'Off until you enter a balance here or a monthly amount in Budgeting.' :
         `Its own return rate, separate from the presets.${fed.length ? ` Also gets what ${
             fed.join(' and ')} adds once full.` : ''}${st.ret < rs.inf ?
             ` At ${st.ret}% it grows slower than ${rs.inf}% inflation, so it loses buying power.` :
-            ''} Turned into monthly income at the withdrawal rate.`;
+            ''} Turned into monthly income at its withdrawal rate.`;
   });
   const R = retirementIncome(d, S, rs.age);
   const ry = retireYear(d, rs);
@@ -347,7 +368,7 @@ function drawRetire(): void {
   const kinds: Array<[string, string]> = [];
   R.parts.forEach((x) => {
     const lbl = x.kind === 'pension' ? 'Pensions' : x.kind === 'investment' ? 'Investments' :
-        x.kind === 'ss' ? 'Social Security' :
+        x.kind === 'savings' ? 'Savings' : x.kind === 'ss' ? 'Social Security' :
         x.partner === d.primary.id ? `${d.primary.name}'s accounts` : 'Other accounts';
     if (!kinds.some(([l]) => l === lbl)) kinds.push([lbl, partColor(x)]);
   });
@@ -385,7 +406,7 @@ function drawChart(today: number): void {
     g += `<line class="grid" x1="${L}" x2="${W - Rr}" y1="${y(v)}" y2="${y(v)}"/><text x="${
         L - 8}" y="${y(v) + 4}" text-anchor="end">${fk(v)}</text>`;
   }
-  const order = ['pension', 'account', 'investment', 'ss'];
+  const order = ['pension', 'account', 'investment', 'savings', 'ss'];
   ages.forEach((x, i) => {
     const bx = L + i * bw + bw * 0.16;
     const w = bw * 0.68;
@@ -441,10 +462,10 @@ function drawTable(): void {
   const ages = TABLE_AGES.filter((a) => a >= lo && a <= hi);
   if (!ages.includes(S.rs.age)) ages.push(S.rs.age);
   ages.sort((a, b) => a - b);
-  const kinds = ['pension', 'account', 'investment', 'ss'].filter((k) =>
+  const kinds = ['pension', 'account', 'investment', 'savings', 'ss'].filter((k) =>
       retirementIncome(d, S, S.rs.age).parts.some((p) => p.kind === k));
   const names: Record<string, string> = {pension: 'Pensions', account: 'Accounts',
-    investment: 'Investments', ss: 'Soc. Sec.'};
+    investment: 'Investments', savings: 'Savings', ss: 'Soc. Sec.'};
   $('rtable').innerHTML = `<tr>${d.partners.map((p) => `<th>${esc(p.name)}</th>`).join('')}<th>Year</th>${
       kinds.map((k) => `<th>${names[k]}</th>`).join('')}<th>After tax</th><th>Once SS starts</th><th>Projected spending</th><th>vs spending, long run</th></tr>` +
       ages.map((a) => {
