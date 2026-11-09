@@ -113,6 +113,7 @@
         take_home_note: "",
         raise_pct: 0,
         social_security: { at_67: 0, claim_age: null },
+        retirement_age: null,
         pensions: [],
         accounts: []
       };
@@ -154,11 +155,12 @@
     });
     const ra = p.assumptions.retirement;
     const rs = {
-      age: ra.default_age,
+      age: d.partners[0]?.retirement_age ?? ra.default_age,
       ret: ra.return_pct,
       inf: ra.inflation_pct,
       wd: ra.withdrawal_pct,
       ss: true,
+      ages: {},
       raise: {},
       ssAmt: {},
       claim: {},
@@ -166,16 +168,17 @@
       acct: {},
       inv: {}
     };
-    d.partners.forEach((x) => {
+    d.partners.forEach((x, i) => {
+      if (i > 0) rs.ages[x.id] = x.retirement_age ?? null;
       rs.raise[x.id] = x.raise_pct;
       rs.ssAmt[x.id] = x.social_security.at_67;
       rs.claim[x.id] = x.social_security.claim_age;
-      x.pensions.forEach((pn, i) => rs.pen[`${x.id}:${i}`] = {
+      x.pensions.forEach((pn, i2) => rs.pen[`${x.id}:${i2}`] = {
         on: true,
         est: { ...pn.estimates },
         monthly: pn.monthly
       });
-      x.accounts.forEach((a, i) => rs.acct[`${x.id}:${i}`] = {
+      x.accounts.forEach((a, i2) => rs.acct[`${x.id}:${i2}`] = {
         on: true,
         bal: a.balance,
         monthly: a.monthly
@@ -335,21 +338,34 @@
   function yearAtAge(d, partner, age) {
     return Math.round(d.todayYear - partner.age) + age;
   }
-  function retireYear(d, rs) {
-    return Math.round(d.todayYear - d.primary.age) + 1 + rs.age;
+  function partnerRetireAge(d, rs, p, a = rs.age) {
+    if (p.id === d.primary.id) return a;
+    const own = rs.ages?.[p.id];
+    return own == null ? ageWhen(d, p, a) : own;
+  }
+  function partnerRetireYear(d, rs, p, a = rs.age) {
+    const own = p.id === d.primary.id ? null : rs.ages?.[p.id];
+    return own == null ? Math.round(d.todayYear - d.primary.age) + 1 + a : Math.round(d.todayYear - p.age) + 1 + own;
+  }
+  function retireYear(d, rs, a = rs.age) {
+    const first = Math.round(d.todayYear - d.primary.age) + 1 + a;
+    return Math.max(first, ...d.partners.map((p) => partnerRetireYear(d, rs, p, a)));
   }
   function retirementIncome(d, s, a) {
     const rs = s.rs;
-    const yrs = a - d.primary.age;
-    const months = Math.round(yrs * 12);
+    const year = retireYear(d, rs, a);
+    const yrs = Math.max(a - d.primary.age, ...d.partners.map((p) => partnerRetireAge(d, rs, p, a) - p.age));
     const r = rs.ret / 100;
-    const inf = Math.pow(1 + rs.inf / 100, yrs);
+    const real = (y) => Math.pow(1 + rs.inf / 100, y);
     const wd = rs.wd / 100 / 12;
     const parts = [];
     const ages = {};
+    const years = {};
     d.partners.forEach((p) => {
-      const ageR = ageWhen(d, p, a);
+      const ageR = partnerRetireAge(d, rs, p, a);
+      const pYrs = ageR - p.age;
       ages[p.id] = ageR;
+      years[p.id] = partnerRetireYear(d, rs, p, a);
       p.pensions.forEach((pn, i) => {
         const key = `${p.id}:${i}`;
         const st = rs.pen[key];
@@ -364,14 +380,15 @@
         const key = `${p.id}:${i}`;
         const st = rs.acct[key];
         if (!st?.on) return;
-        const bal = fv(st.bal, st.monthly, months, r);
+        const bal = fv(st.bal, st.monthly, Math.round(pYrs * 12), r);
         parts.push({
           kind: "account",
           key,
           name: ac.name,
           partner: p.id,
-          value: bal / inf * wd,
+          value: bal / real(pYrs) * wd,
           balance: bal,
+          yrs: pYrs,
           started: true
         });
       });
@@ -379,15 +396,16 @@
     d.p.investments.forEach((v) => {
       const st = rs.inv[v.id];
       if (!st) return;
-      const bal = fv(st.bal, s.st.sav[`inv:${v.id}`] ?? 0, months, st.ret / 100);
+      const bal = fv(st.bal, s.st.sav[`inv:${v.id}`] ?? 0, Math.round(yrs * 12), st.ret / 100);
       if (bal <= 0) return;
       parts.push({
         kind: "investment",
         key: v.id,
         name: v.name,
         partner: "",
-        value: bal / inf * wd,
+        value: bal / real(yrs) * wd,
         balance: bal,
+        yrs,
         started: true
       });
     });
@@ -398,13 +416,14 @@
         const claimAge = want == null ? Math.max(62, ageR) : Math.min(70, Math.max(want, ageR));
         const value = (rs.ssAmt[p.id] ?? 0) * ssFactor(claimAge);
         if (!value) return;
+        const ageThen = ageR + year - years[p.id];
         parts.push({
           kind: "ss",
           key: p.id,
           name: `${p.name} Social Security`,
           partner: p.id,
           value,
-          started: ageR >= claimAge - 0.01,
+          started: ageThen >= claimAge - 0.01,
           claimAge,
           start: yearAtAge(d, p, Math.ceil(claimAge - 0.01))
         });
@@ -416,6 +435,8 @@
     return {
       age: a,
       yrs,
+      year,
+      years,
       parts,
       total,
       later,
@@ -455,13 +476,11 @@
   }
   function incomeAt(d, s, y) {
     const { st, rs, fs } = s;
-    if (y < retireYear(d, rs)) {
-      const n = Math.max(0, y - d.todayYear);
-      return sum(d.partners.map((p) => (st.inc[p.id] ?? 0) * Math.pow(1 + (rs.raise[p.id] ?? 0) / 100, n))) + (st.inc.other ?? 0);
-    }
     const R = retirementIncome(d, s, rs.age);
-    const v = sum(R.parts.filter((x) => x.kind !== "ss" || y >= (x.start ?? 0)).map((x) => x.value));
-    return v * (1 - fs.tax / 100);
+    const n = Math.max(0, y - d.todayYear);
+    const pay = sum(d.partners.filter((p) => y < R.years[p.id]).map((p) => (st.inc[p.id] ?? 0) * Math.pow(1 + (rs.raise[p.id] ?? 0) / 100, n))) + (y < R.year ? st.inc.other ?? 0 : 0);
+    const paid = sum(R.parts.filter((x) => x.kind === "investment" ? y >= R.year : y >= R.years[x.partner] && (x.kind !== "ss" || y >= (x.start ?? 0))).map((x) => x.value));
+    return pay + paid * (1 - fs.tax / 100);
   }
   function deflator(d, s, y) {
     return s.fs.nominal ? Math.pow(1 + s.rs.inf / 100, y - d.todayYear) : 1;
@@ -500,9 +519,9 @@
       rows.push([`${c.name}: share of college covered`, Math.round(x.pct * 100), 1, "pct"]);
       rows.push([`${c.name}: surplus / shortfall, today's $`, x.today, 1]);
     });
+    rows.push(["Retirement", null]);
+    d.partners.forEach((p) => rows.push([d.partners.length > 1 ? `Retirement age (${p.name})` : "Retirement age", R.ages[p.id], 0, "age"]));
     rows.push(
-      ["Retirement", null],
-      [`Retirement age (${d.primary.name})`, s.rs.age, 0, "age"],
       ["First full year retired", ry, 0, "year"],
       ["Income after tax, at retirement", R.total * net, 1],
       ["Income after tax, once all Social Security starts", R.full * net, 1],
@@ -578,6 +597,7 @@
       };
       if (simple[k]) return simple[k];
       if (k === "raise") return `${who(sub)} yearly raise`;
+      if (k === "ages") return `${who(sub)} retirement age`;
       if (k === "ssAmt") return `${who(sub)} Social Security at 67`;
       if (k === "claim") return `${who(sub)} claims Social Security at`;
       if (k === "pen") {
@@ -601,7 +621,7 @@
   }
   function settingVal(d, path, v) {
     if (v === void 0) return "\u2013";
-    if (v === null) return "at retirement";
+    if (v === null) return path[1] === "ages" ? `same year as ${d.primary.name}` : "at retirement";
     if (typeof v === "boolean") return v ? "On" : "Off";
     if (path[0] === "cs" && path[2] === "school") {
       return d.p.assumptions.college.schools[String(v)]?.name ?? String(v);
@@ -609,7 +629,7 @@
     if (typeof v !== "number") return String(v);
     if (path[0] === "fs" && (path[1] === "kg" || path[1] === "rt")) return `${v > 0 ? "+" : ""}${v}%`;
     if (isPct(path)) return `${v}%`;
-    if (["age", "claim"].includes(path[1])) return String(v);
+    if (["age", "ages", "claim"].includes(path[1])) return String(v);
     return `${d.p.plan.currency_symbol}${Math.round(v).toLocaleString("en-US")}`;
   }
   function sectionOf(path) {
@@ -1739,6 +1759,8 @@
     const R = retirementIncome(d, S, S.rs.age);
     const rS = spendAt(d, S, RY);
     const now = spendAt(d, S, d.todayYear);
+    const early = d.partners.filter((p) => R.years[p.id] < RY).map((p) => [R.years[p.id], `${p.name} retired`]);
+    const retired = early.length ? "All retired" : "Retired";
     d.regular.forEach((c) => {
       $(`fc-t-${c}`).textContent = fmt(S.st.plan[d.cats[c].name] ?? 0);
       $(`fc-r-${c}`).textContent = fmt(rS.cats[d.cats[c].name]);
@@ -1757,7 +1779,7 @@
     const H = 320;
     const L = 56;
     const Rr = 12;
-    const events = d.children.map((c, k) => [Math.floor(d.gradT(k)), `${c.name} out`]).concat([[RY, "Retired"]]).filter(([yr]) => yr >= years[0] && yr <= years[years.length - 1]);
+    const events = d.children.map((c, k) => [Math.floor(d.gradT(k)), `${c.name} out`]).concat(early, [[RY, retired]]).filter(([yr]) => yr >= years[0] && yr <= years[years.length - 1]);
     const T = 16 + events.length * 12;
     const B = 30;
     const pw = W - L - Rr;
@@ -1801,7 +1823,7 @@
       const yr = Math.floor(d.gradT(k)) + 1;
       if (yr < RY) stages.push([yr, `${c.name} out`]);
     });
-    stages.push([RY, "Retired"]);
+    stages.push(...early, [RY, retired]);
     const ssDone = R.fullYear;
     if (ssDone > RY) stages.push([ssDone, "All Social Security started"]);
     stages.sort((a, b) => a[0] - b[0]);
@@ -1923,7 +1945,9 @@
 
 <h3 id="h-retire">Retirement</h3>
 <ul>
-  <li><b>The slider</b> is the first partner's retirement age; everyone retires that year.</li>
+  <li><b>The sliders</b>: the big one is the first partner's retirement age (the chart and table
+    follow it). Each other partner retires the same year unless you untick <i>same year as</i> and
+    set their own age.</li>
   <li><b>Income</b>: pensions, retirement accounts, investments and Social Security, before and
     after the retirement tax rate. Social Security that starts later is drawn as a dashed outline.</li>
   <li><b>Comparison</b> is against <i>projected</i> retirement spending (children gone,
@@ -1981,7 +2005,8 @@
     ra.min = String(lo);
     ra.max = String(Math.max(hi, 75));
     $("ra-who").textContent = `${p.name} retires at`;
-    $("retire-sub").textContent = `Monthly income at each retirement age, in today's dollars. ${d.partners.map((x) => `${x.name} is ${x.age}`).join(", ")}.${d.partners.length > 1 ? " Everyone retires in the same year." : ""}`;
+    $("retire-sub").textContent = `Monthly income at each retirement age, in today's dollars. ${d.partners.map((x) => `${x.name} is ${x.age}`).join(", ")}.${d.partners.length > 1 ? ` The chart and table follow ${p.name}'s age.` : ""}`;
+    buildOthers();
     buildPanels();
     buildAssumptions();
     ra.addEventListener("input", () => {
@@ -2003,6 +2028,7 @@
     $in("r-ret").value = String(rs.ret);
     $in("r-inf").value = String(rs.inf);
     $in("r-wd").value = String(rs.wd);
+    drawOthers();
     document.querySelectorAll("[data-r]").forEach((el) => {
       const v = getR(el.dataset.r);
       if (el.type === "checkbox") el.checked = !!v;
@@ -2015,6 +2041,46 @@
   }
   var lo = 55;
   var hi = 70;
+  function buildOthers() {
+    const d = app.d;
+    const box = $("ra-others");
+    const others = d.partners.slice(1);
+    box.hidden = !others.length;
+    box.innerHTML = others.map((p) => {
+      const min = Math.max(50, Math.ceil(p.age));
+      return `<div class="ctl"><div class="agehead"><span class="eyebrow">${esc(p.name)} retires at</span><span
+      class="big num" id="rao-v-${esc(p.id)}"></span><span class="muted" id="rao-when-${esc(p.id)}"></span></div><label class="small"><input type="checkbox" data-same="${esc(p.id)}">
+      same year as ${esc(d.primary.name)}</label><input type="range" data-rao="${esc(p.id)}" min="${min}" max="${Math.max(min + 5, 75)}" step="1" aria-label="${esc(p.name)} retirement age"></div>`;
+    }).join("");
+    box.querySelectorAll("[data-rao]").forEach((el) => {
+      el.addEventListener("input", () => {
+        app.S.rs.ages[el.dataset.rao] = +el.value;
+        changed();
+      });
+    });
+    box.querySelectorAll("[data-same]").forEach((el) => {
+      el.addEventListener("change", () => {
+        const id = el.dataset.same;
+        const p = d.partners.find((x) => x.id === id);
+        app.S.rs.ages[id] = el.checked ? null : Math.round(ageWhen(d, p, app.S.rs.age));
+        changed();
+      });
+    });
+  }
+  function drawOthers() {
+    const { d, S } = app;
+    const R = retirementIncome(d, S, S.rs.age);
+    d.partners.slice(1).forEach((p) => {
+      const own = S.rs.ages[p.id];
+      const age = R.ages[p.id];
+      const yr = R.years[p.id] - 1;
+      $(`rao-v-${p.id}`).textContent = String(Math.floor(age));
+      $(`rao-when-${p.id}`).textContent = `${yr} \xB7 ${Math.max(0, yr - Math.floor(d.todayYear))} years from now`;
+      const same2 = document.querySelector(`[data-same="${CSS.escape(p.id)}"]`);
+      same2.checked = own == null;
+      document.querySelector(`[data-rao="${CSS.escape(p.id)}"]`).value = String(Math.round(age));
+    });
+  }
   function partColor(x) {
     if (x.kind === "pension") return "--r1";
     if (x.kind === "investment") return "--r5";
@@ -2123,6 +2189,7 @@
     const { d, S } = app;
     const rs = S.rs;
     $in("ra").value = String(rs.age);
+    drawOthers();
     document.querySelectorAll("[data-pane]").forEach((el) => {
       el.classList.toggle("pane-off", !getR(el.dataset.pane));
     });
@@ -2152,15 +2219,16 @@
     const R = retirementIncome(d, S, rs.age);
     const ry = retireYear(d, rs);
     const sp = spendAt(d, S, ry).spend;
+    const staggered = d.partners.some((p) => R.years[p.id] !== ry);
     const net = 1 - S.fs.tax / 100;
     const today = spendToday(d, S.st);
     $("ra-v").textContent = String(rs.age);
-    $("ra-when").textContent = `${ry - 1} \xB7 ${Math.round(R.yrs)} years from now`;
+    $("ra-when").textContent = `${R.years[d.primary.id] - 1} \xB7 ${Math.round(rs.age - d.primary.age)} years from now`;
     const who = (id) => d.partners.find((p) => p.id === id)?.name ?? "";
     const row = (x) => {
       let sub = "";
       if (x.balance != null) {
-        sub = `${fmt(x.balance)} balance \xB7 ${fmt(x.balance / Math.pow(1 + rs.inf / 100, R.yrs))} in today's $`;
+        sub = `${fmt(x.balance)} balance \xB7 ${fmt(x.balance / Math.pow(1 + rs.inf / 100, x.yrs ?? R.yrs))} in today's $`;
       }
       if (x.kind === "pension") sub = who(x.partner);
       if (x.kind === "ss") {
@@ -2174,7 +2242,7 @@
       return `<span></span><span><b>${ok ? lbl.replace("Gap", "Surplus") : lbl}</b> <span
       class="small muted">${Math.round(c * 100)}% covered</span></span><span class="num ${ok ? "pos" : "neg"}"><b>${ok ? "+" : ""}${fmt(v - sp)}</b></span>`;
     };
-    $("r-parts").innerHTML = R.parts.map(row).join("") + `<span></span><span class="tot">Income at retirement, before tax</span><span class="num tot">${fmt(R.total)}/mo</span><span></span><span class="muted">Income tax (${S.fs.tax}%)</span><span class="num muted">(${fmt(R.total * S.fs.tax / 100)})</span><span></span><span><b>After tax</b></span><span class="num"><b>${fmt(R.total * net)}/mo</b></span>` + (R.later > 0 ? `<span></span><span><b>After tax, once all Social Security starts</b> <span
+    $("r-parts").innerHTML = R.parts.map(row).join("") + `<span></span><span class="tot">Income ${staggered ? `once everyone is retired (${ry - 1})` : "at retirement"}, before tax</span><span class="num tot">${fmt(R.total)}/mo</span><span></span><span class="muted">Income tax (${S.fs.tax}%)</span><span class="num muted">(${fmt(R.total * S.fs.tax / 100)})</span><span></span><span><b>After tax</b></span><span class="num"><b>${fmt(R.total * net)}/mo</b></span>` + (R.later > 0 ? `<span></span><span><b>After tax, once all Social Security starts</b> <span
         class="small muted">from ${R.fullYear}</span></span><span class="num"><b>${fmt(R.full * net)}/mo</b></span>` : "") + `<span></span><span>Projected spending in retirement <span class="small muted">children
         gone, retirement changes, health insurance \xB7 today it's ${fmt(today)}</span></span><span
         class="num">${fmt(sp)}/mo</span>` + gapRow(R.later > 0 ? "Gap at retirement" : "Gap each month", R.total * net) + (R.later > 0 ? gapRow(`Gap from ${R.fullYear} on`, R.full * net) : "");
@@ -2203,7 +2271,7 @@
     const ph = H - T - B;
     const bw = pw / ages.length;
     const base0 = Math.round(d.todayYear - d.primary.age);
-    const spA = ages.map((x) => spendAt(d, S, base0 + 1 + x.age).spend);
+    const spA = ages.map((x) => spendAt(d, S, x.year).spend);
     const max = Math.max(today, ...spA, ...ages.map((x) => x.full * net), 1);
     const step = niceStep(max);
     const top = Math.ceil(max / step) * step;
@@ -2266,7 +2334,7 @@
     };
     $("rtable").innerHTML = `<tr>${d.partners.map((p) => `<th>${esc(p.name)}</th>`).join("")}<th>Year</th>${kinds.map((k) => `<th>${names[k]}</th>`).join("")}<th>After tax</th><th>Once SS starts</th><th>Projected spending</th><th>vs spending, long run</th></tr>` + ages.map((a) => {
       const x = retirementIncome(d, S, a);
-      const sa = spendAt(d, S, base0 + 1 + a).spend;
+      const sa = spendAt(d, S, x.year).spend;
       const df = x.full * net - sa;
       return `<tr data-a="${a}" class="${a === S.rs.age ? "on" : ""}">${d.partners.map((p) => `<td>${Math.floor(x.ages[p.id])}</td>`).join("")}<td>${base0 + a}</td>${kinds.map((k) => `<td>${fmt(sum(x.parts.filter((p) => p.kind === k && p.started).map((p) => p.value)))}</td>`).join("")}<td>${fmt(x.total * net)}</td><td>${x.later > 0 ? `${fmt(x.full * net)} <span class="muted">(${x.fullYear})</span>` : "\u2013"}</td><td>${fmt(sa)}</td><td class="${df >= 0 ? "pos" : "neg"}">${df >= 0 ? "+" : ""}${fmt(df)}</td></tr>`;
     }).join("");
@@ -2954,6 +3022,14 @@
       ["", "When retiring (62+)"],
       ...CLAIM_AGES.map((a) => [String(a), String(a)])
     ], ss.claim_age ?? "")}
+      ${input(
+      "retirement_age",
+      "Retires at (age)",
+      p.retirement_age ?? "",
+      "number",
+      i === 0 ? "Empty: the starting age under Assumptions" : "Empty: the same year as the first partner",
+      "data-optional"
+    )}
     </div>
     <div class="subhead">Pensions</div>
     ${listEditor("pensions", p.pensions ?? [], pensionRow, "+ Add pension")}
@@ -2975,6 +3051,7 @@
         accounts: readRows(form, "accounts")
       };
       if (!top.take_home_note) delete next.take_home_note;
+      if (top.retirement_age === void 0 || top.retirement_age === "") delete next.retirement_age;
       const list = partners.slice();
       if (i === null) list.push(next);
       else list[i] = next;
