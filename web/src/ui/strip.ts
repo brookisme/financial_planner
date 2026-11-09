@@ -10,9 +10,9 @@
 
 import {$, app, onChange} from '../app';
 import {esc, fmt} from '../format';
-import {type Budget, budget, rebaseBudget} from '../model';
+import {type Budget, budget} from '../model';
 import type {PlannerState} from '../types';
-import {savedBudgets, stripView} from './budgets';
+import {AVG, budgetChoices, budgetSt, savedBudgets, stripView} from './budgets';
 
 //
 // PUBLIC
@@ -45,24 +45,25 @@ export function buildStrip(): void {
 export function refreshStrip(): void {
   const d = app.d;
   const list = savedBudgets();
+  const choices = budgetChoices();
   const view = stripView();
-  view.rows = view.rows.filter((id) => id === CURRENT || list.some((b) => b.id === id));
-  if (view.cmp && !list.some((b) => b.id === view.cmp)) view.cmp = null;
+  view.rows = view.rows.filter((id) => id === CURRENT || budgetSt(id));
+  if (view.cmp && !budgetSt(view.cmp)) view.cmp = null;
   const actual = budget(d, app.defs.st);
   const planOf = (id: string): [string, PlannerState] => {
     if (id === CURRENT) return ['Current edits in Budgeting', app.S.st];
-    const b = list.find((x) => x.id === id)!;
-    return [`Budget “${b.name}”`, rebaseBudget(app.defs.st, b.st, b.base)];
+    if (id === AVG) return [`${d.n}-month average`, app.defs.st];
+    return [`Budget “${list.find((x) => x.id === id)!.name}”`, budgetSt(id)!];
   };
-  const cmpSel = list.length ? `<label class="eyebrow" for="strip-cmp">Compare with</label><select
+  const cmpSel = `<label class="eyebrow" for="strip-cmp">Compare with</label><select
     id="strip-cmp" class="cmp-sel" data-cmp><option value="">Choose a budget</option>${
-    list.map((b) => `<option value="${esc(b.id)}"${b.id === view.cmp ? ' selected' : ''}>${
-      esc(b.name)}</option>`).join('')}</select>` : '';
+    choices.map(([v, n]) => `<option value="${esc(v)}"${v === view.cmp ? ' selected' : ''}>${
+      esc(n)}</option>`).join('')}</select>`;
   let h = `<div class="strip-head"><span class="eyebrow">Last ${d.n} months · actual</span><span
     class="small muted">from your transactions</span></div>` +
       row(actual, 'actual', view.cmp ? vsTile(actual, planOf(view.cmp)[1], cmpSel) :
-          list.length ? `<div class="vs">${cmpSel}<span class="small muted">to see if you were over
-            or under it</span></div>` : '');
+          `<div class="vs">${cmpSel}<span class="small muted">to see if you were over or under
+            it</span></div>`);
   view.rows.forEach((id, i) => {
     const [name, st] = planOf(id);
     const b = budget(d, st);
@@ -71,8 +72,8 @@ export function refreshStrip(): void {
         row(b, 'plan', vsTile(actual, st, '', true));
   });
   const options = [...(view.rows.includes(CURRENT) ? [] : [[CURRENT, 'Current edits']]),
-    ...list.filter((b) => !view.rows.includes(b.id)).map((b) => [b.id, b.name])];
-  if (list.length && options.length) {
+    ...choices.filter(([v]) => !view.rows.includes(v))];
+  if (options.length) {
     h += `<div class="strip-add"><select class="cmp-sel" data-add aria-label="Show a budget"><option
       value="">+ Show a budget</option>${options.map(([v, n]) => `<option value="${esc(v)}">${
       esc(n)}</option>`).join('')}</select></div>`;
