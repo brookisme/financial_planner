@@ -1,5 +1,7 @@
-# kind: spending (regular, averaged) | one_time (kept out of averages, optional toggle)
-#       credit (money in that can offset spending) | ignore (transfers, payments, paychecks)
+# kind: spending (regular, averaged) | annual (yearly expenses: taxes, insurance)
+#       | one_time (1-time purchases) | emergency (paid from the emergency fund)
+#       | credit (money in that can offset spending) | ignore (transfers, payments, paychecks)
+# annual, one_time and emergency are kept out of the averages; each gets a toggle in the planner.
 # kids_gone_pct / retired_pct: how the category changes once the kids leave / after retiring.
 
 categories:
@@ -25,15 +27,15 @@ categories:
   - {name: Cash & checks, group: Unsorted, kids_gone_pct: -30}
   - {name: Other, group: Unsorted, kids_gone_pct: -20}
 
-  # One-time / yearly costs: shown as toggles under "Yearly and one-time costs"
+  # Annual expenses, 1-time purchases and emergency fund costs: toggles in the planner
   - name: Income tax
-    kind: one_time
+    kind: annual
     tax: true
     default_on: true
     label: Set aside for income tax
     note: state payment
   - name: Property tax
-    kind: one_time
+    kind: annual
     tax: true
     in_retirement: true
     label: Set aside for property tax
@@ -41,6 +43,12 @@ categories:
     kind: one_time
     label: Include furniture / large household purchases
     note: may come up again
+  - name: Car repairs
+    kind: emergency
+    default_on: true
+    in_retirement: true
+    label: Include car repairs
+    note: unplanned
 
   # Credits (money in)
   - name: Benefit reimbursements
