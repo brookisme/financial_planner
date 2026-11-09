@@ -48,12 +48,13 @@ function payload(): Payload {
     household: {
       partners: [
         {id: 'a', name: 'Partner A', age: 50, take_home_monthly: 8000, take_home_note: '',
-         raise_pct: 0, social_security: {at_67: 3000, claim_age: null},
+         raise_pct: 0, social_security: {at_67: 3000, claim_age: null}, retirement_age: null,
          pensions: [{name: 'Pension', estimates: {55: 1000, 60: 2500, 65: 4500}, monthly: null,
                      service_years_now: 5, grows_with_raises: true}],
          accounts: [{name: '403b', balance: 100000, monthly: 0}]},
         {id: 'b', name: 'Partner B', age: 47, take_home_monthly: 5000, take_home_note: '',
-         raise_pct: 0, social_security: {at_67: 2000, claim_age: 62}, pensions: [],
+         raise_pct: 0, social_security: {at_67: 2000, claim_age: 62}, retirement_age: null,
+         pensions: [],
          accounts: []},
       ],
       children: [
@@ -268,6 +269,49 @@ describe('spending over time', () => {
         R.parts.filter((x) => x.kind === 'ss' && (x.start ?? 0) <= 2042)
             .reduce((t, x) => t + x.value, 0);
     expect(incomeAt(d, s, 2042)).toBeCloseTo(atRet * 0.88, 8);
+  });
+});
+
+describe('separate retirement ages', () => {
+  it('defaults to the same year as the first partner', () => {
+    const {d, s} = setup();
+    expect(s.rs.ages).toEqual({b: null});
+    const R = retirementIncome(d, s, 65);
+    expect(R.ages.b).toBe(62);
+    expect(R.years).toEqual({a: 2042, b: 2042});
+  });
+
+  it('pays the earlier retiree\'s Social Security while the other still works', () => {
+    const {d, s} = setup();
+    s.rs.ages.b = 60;
+    expect(retireYear(d, s.rs)).toBe(2042);
+    expect(retirementIncome(d, s, 65).years.b).toBe(2040);
+    expect(incomeAt(d, s, 2039)).toBe(13000);
+    expect(incomeAt(d, s, 2040)).toBe(8000);                          // B retired, no SS yet
+    expect(incomeAt(d, s, 2041)).toBeCloseTo(8000 + 2000 * 0.7 * 0.88, 8);
+  });
+
+  it('waits for the later retiree before spending switches to retirement', () => {
+    const {d, s} = setup();
+    s.rs.ages.b = 70;
+    const R = retirementIncome(d, s, 65);
+    expect(retireYear(d, s.rs)).toBe(2050);
+    expect(R.year).toBe(2050);
+    expect(spendAt(d, s, 2045).ret).toBe(false);
+    const a = R.parts.filter((x) => x.partner === 'a' && x.kind !== 'ss')
+        .reduce((t, x) => t + x.value, 0);
+    const ssA = R.parts.find((x) => x.kind === 'ss' && x.partner === 'a')!;
+    expect(ssA.started).toBe(true);
+    expect(incomeAt(d, s, 2045)).toBeCloseTo(5000 + (a + ssA.value) * 0.88, 8);
+    expect(results(d, s).find((r) => r[0] === 'Retirement age (Partner B)')![1]).toBe(70);
+  });
+
+  it('labels the setting in scenario comparisons', () => {
+    const {d, s} = setup();
+    const b = clone(s);
+    b.rs.ages.b = 60;
+    expect(diffSettings(d, s, b).map((x) => [x[0], x[1], x[2]])).toEqual([
+      ['Partner B retirement age', 'same year as Partner A', '60']]);
   });
 });
 
