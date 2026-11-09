@@ -2,7 +2,9 @@
  * @fileoverview Budgets: named snapshots of the Budgeting settings only (planned categories,
  * credit toggles, income, savings, annual expenses, emergency costs). Save / update / delete /
  * start over; picking a budget fills Planned / mo, and every budget can be the Compare column.
- * 529 and retirement settings are not part of a budget.
+ * 529 and retirement settings are not part of a budget, but the same budget buttons sit at the
+ * top of College 529s and Retirement (their contributions come from the budget); all of them
+ * switch the one active budget.
  *
  * License: BSD 3-Clause
  */
@@ -95,15 +97,21 @@ function touch(): void {
 function renderBar(): void {
   const a = active();
   const dirty = a ? dirtyFrom(a) : null;
-  const tabs = $('bg-tabs');
-  tabs.innerHTML = state.list.length ? state.list.map((b) => `<button type="button" class="chip"
-      data-id="${esc(b.id)}" aria-pressed="${b.id === state.active}">${esc(b.name)}${
-      b.id === state.active && dirty ? ' •' : ''}</button>`).join('') :
-      '<span class="small muted">No saved budgets yet. Name this one and save it.</span>';
-  $('bg-state').textContent = pendingSwitch ?
+  const chips = state.list.map((b) => `<button type="button" class="chip" data-id="${
+      esc(b.id)}" aria-pressed="${b.id === state.active}">${esc(b.name)}${
+      b.id === state.active && dirty ? ' •' : ''}</button>`).join('');
+  document.querySelectorAll<HTMLElement>('[data-bg-tabs]').forEach((el) => {
+    el.innerHTML = chips || (el.id === 'bg-tabs' ?
+        '<span class="small muted">No saved budgets yet. Name this one and save it.</span>' :
+        '<span class="small muted">No saved budgets yet. Save one in <a href="#budget">Budgeting</a>.</span>');
+  });
+  const line = pendingSwitch ?
       'Unsaved changes will be lost. Click the budget again to switch.' :
       a ? (dirty ? `Unsaved changes to "${a.name}"` : `Showing "${a.name}"`) :
       'Not saved as a budget yet';
+  document.querySelectorAll<HTMLElement>('[data-bg-state]').forEach((el) => {
+    el.textContent = line;
+  });
   const up = $('bg-update') as HTMLButtonElement;
   up.hidden = !a;
   up.textContent = a ? `Update "${a.name}"` : 'Update';
@@ -112,7 +120,7 @@ function renderBar(): void {
   del.hidden = !a;
   del.textContent = pendingDel ? 'Click again to delete' : 'Delete';
   $('bg-reset').textContent = pendingReset ? 'Click again to start over' : 'Start from averages';
-  tabs.querySelectorAll<HTMLButtonElement>('button').forEach((btn) => {
+  document.querySelectorAll<HTMLButtonElement>('[data-bg-tabs] button').forEach((btn) => {
     btn.addEventListener('click', () => {
       const id = btn.dataset.id!;
       if (id === state.active) return;
