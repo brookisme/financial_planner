@@ -159,7 +159,7 @@ button.btn.primary,a.btn.primary{background:var(--ink);color:var(--bg);border-co
 .retire{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:18px;align-items:start}
 @media (max-width:860px){.retire{grid-template-columns:1fr}}
 .agehead{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 14px}
-.agehead .big{font-size:40px;line-height:1}
+.agehead .big{font-size:26px;line-height:1}
 .parts{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:6px 10px;align-items:center;font-size:14px}
 .parts .num{text-align:right}
 .parts .tot{font-weight:600;border-top:2px solid var(--ink);padding-top:6px}
