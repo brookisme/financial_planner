@@ -7,9 +7,10 @@
 
 import {describe, expect, it} from 'vitest';
 
-import {ageWhen, budget, clone, compact, contributions, creditsMo, Data, defaults, describeData,
-        diffSettings, expand, flatten, fv, incomeAt, interpolatePension, kidCalc, rebase, results,
-        retireYear, retirementIncome, simulate, spendAt, ssFactor, taxMo} from '../src/model';
+import {ageWhen, annualMo, budget, clone, compact, contributions, creditsMo, Data, defaults,
+        describeData, diffBudget, diffSettings, expand, flatten, fv, incomeAt, interpolatePension,
+        kidCalc, rebase, rebaseBudget, results, retireYear, retirementIncome, simulate, spendAt,
+        ssFactor} from '../src/model';
 import type {Category, Contribution, Payload, SavLine, Settings} from '../src/types';
 
 //
@@ -34,8 +35,8 @@ function payload(): Payload {
     categories: [
       cat('Groceries', {kids_gone_pct: -50}),                         // 0
       cat('Shopping', {flexible: true, retired_pct: 100}),            // 1
-      cat('Income tax', {kind: 'one_time', tax: true, default_on: true}),       // 2
-      cat('Property tax', {kind: 'one_time', tax: true, in_retirement: true}),  // 3
+      cat('Income tax', {kind: 'annual', tax: true, default_on: true}),         // 2
+      cat('Property tax', {kind: 'annual', tax: true, in_retirement: true}),    // 3
       cat('Furniture', {kind: 'one_time'}),                           // 4
       cat('Reimb', {kind: 'credit', default_on: true, offsets: 'Shopping'}),    // 5
       cat('Refund', {kind: 'credit', default_on: true, offsets: 'Income tax'}), // 6
@@ -88,7 +89,7 @@ function payload(): Payload {
 
 /** Contribution fields for a fixed amount per month. */
 function fixed(monthly: number): Contribution {
-  return {monthly, left_pct: null, min_monthly: null, max_monthly: null};
+  return {monthly, left_pct: null, min_monthly: null, max_monthly: null, rest: false};
 }
 
 /** A planner line with a fixed amount. */
@@ -127,9 +128,11 @@ describe('defaults', () => {
     const {d, s} = setup();
     expect(s.st.plan.Groceries).toBe(1100);
     expect(s.st.plan.Reimb).toBe(200);
-    expect(s.st.plan.Refund).toBeUndefined();       // nested under a one-time cost
-    expect(s.st.on).toEqual({'Income tax': true, 'Property tax': false, Furniture: false,
-      Reimb: true, Refund: true, 'Other credits': false});
+    expect(s.st.plan.Refund).toBeUndefined();       // nested under an annual cost
+    expect(s.st.on).toEqual({Reimb: true, Refund: true, 'Other credits': false});
+    expect(s.st.annual).toEqual([{name: 'Income tax', amt: 14400},
+                                 {name: 'Property tax', amt: 7200}]);
+    expect(s.st.emerg).toBeNull();
     expect(s.st.sav).toEqual({'529:k1': line(800), '529:k2': line(800), 'sav:em': line(500),
       'inv:br': line(0)});
     expect(s.cs.k1).toEqual({school: 'state', cost: 40000, ret: 6, inf: 4});
@@ -139,25 +142,21 @@ describe('defaults', () => {
 });
 
 describe('monthly budget', () => {
-  it('subtracts toggled credits and nets refunds against their tax', () => {
+  it('subtracts toggled credits and adds the annual list as a monthly amount', () => {
     const {d, s} = setup();
-    // income tax 1200/mo, refund 300/mo -> 900; property tax off
-    expect(taxMo(d, s.st)).toBe(900);
-    s.st.on['Property tax'] = true;
-    expect(taxMo(d, s.st)).toBe(1500);
-    expect(taxMo(d, s.st, true)).toBe(600);          // only property tax continues
-    s.st.on.Refund = false;
-    expect(taxMo(d, s.st)).toBe(1800);
     expect(creditsMo(d, s.st)).toBe(200);
     expect(creditsMo(d, s.st, true)).toBe(0);        // reimbursements stop at retirement
+    expect(annualMo(s.st)).toBe(1800);               // (14400 + 7200) / 12
     const b = budget(d, s.st);
     expect(b.income).toBe(13000);
     expect(b.regular).toBe(1600);
     expect(b.spend).toBe(1400);
+    expect(b.annual).toBe(1800);
     expect(b.savings).toBe(2100);
-    expect(b.left).toBe(13000 - 1400 - 2100 - 1800);
-    s.st.on.Furniture = true;
-    expect(budget(d, s.st).spend).toBe(1700);
+    expect(b.left).toBe(13000 - 1400 - 1800 - 2100);
+    s.st.annual.push({name: 'House', amt: 2400});
+    s.st.annual = s.st.annual.filter((a) => a.name !== 'Income tax');
+    expect(budget(d, s.st).annual).toBe((7200 + 2400) / 12);
   });
 });
 
@@ -171,21 +170,30 @@ describe('contributions', () => {
     expect(contributions([['x', pct(50, {min: 200})]], -100)).toEqual({amt: {x: 200}, left: -300});
   });
 
+  it('splits whatever is left after fixed and percent lines evenly between rest lines', () => {
+    const rest = line(300, {mode: 'rest'});      // its old fixed amount must not count
+    const c = contributions([['a', line(1000)], ['b', line(0, {mode: 'pct', pct: 25})],
+                             ['r1', rest], ['r2', rest]], 5000);
+    expect(c.amt).toEqual({a: 1000, b: 1000, r1: 1500, r2: 1500});
+    expect(c.left).toBe(0);
+    expect(contributions([['r', rest]], -50)).toEqual({amt: {r: 0}, left: -50});
+  });
+
   it('puts a percent of the left-over into a line in the budget', () => {
     const {d, s} = setup();
-    expect(budget(d, s.st).left).toBe(8600);
+    expect(budget(d, s.st).left).toBe(7700);
     s.st.sav['inv:br'] = line(0, {mode: 'pct', pct: 25});
     const b = budget(d, s.st);
-    expect(b.amt['inv:br']).toBe(2150);
-    expect(b.investing).toBe(2150);
-    expect(b.left).toBe(6450);
+    expect(b.amt['inv:br']).toBe(1925);
+    expect(b.investing).toBe(1925);
+    expect(b.left).toBe(5775);
   });
 
   it('recomputes percent lines each year from that year\'s left-over', () => {
     const {d, s} = setup();
     s.st.sav['inv:br'] = line(0, {mode: 'pct', pct: 50});
-    expect(spendAt(d, s, 2030).savings).toBe(2100 + 4300);
-    expect(spendAt(d, s, 2035).savings).toBeCloseTo(1300 + 9675 / 2, 8);   // older child out
+    expect(spendAt(d, s, 2030).savings).toBe(2100 + 3850);
+    expect(spendAt(d, s, 2035).savings).toBeCloseTo(1300 + 8775 / 2, 8);   // older child out
   });
 });
 
@@ -217,11 +225,9 @@ describe('savings with a max', () => {
 });
 
 describe('emergency costs', () => {
-  /** The fixture with a $600/mo emergency cost (on by default). */
+  /** The fixture, with the savings account as an emergency fund holding 3000 if asked. */
   function withEmergency(fund: boolean): {d: Data; s: Settings} {
     const p = payload();
-    p.categories.push({...CAT_DEFAULTS, name: 'Car repair', kind: 'emergency', default_on: true});
-    p.by_cat.push([1200, 0]);
     if (fund) Object.assign(p.savings[0], {type: 'emergency', balance: 3000});
     const d = new Data(p);
     return {d, s: defaults(d)};
@@ -229,18 +235,27 @@ describe('emergency costs', () => {
 
   it('count as spending when there is no emergency fund', () => {
     const {d, s} = withEmergency(false);
+    expect(budget(d, s.st).emergency).toBe(0);
+    s.st.emerg = 600;
     expect(budget(d, s.st).spend).toBe(2000);
-    expect(spendAt(d, s, 2030).spend).toBe(2000 + 900);
+    expect(spendAt(d, s, 2030).spend).toBe(2000 + 1800);
+  });
+
+  it('default to what goes into the fund, so it holds steady', () => {
+    const {d, s} = withEmergency(true);
+    expect(budget(d, s.st).emergency).toBe(500);
+    expect(simulate(d, s).years.get(2030)!.bal['sav:em']).toBe(3000);
   });
 
   it('come out of the emergency fund, and only the uncovered part hits the month', () => {
     const {d, s} = withEmergency(true);
+    s.st.emerg = 600;
     const b = budget(d, s.st);
-    expect([b.spend, b.emergency, b.left]).toEqual([1400, 600, 8600]);
+    expect([b.spend, b.emergency, b.left]).toEqual([1400, 600, 7700]);
     // 3000 + 500/mo in - 600/mo out: covered for 25 months, then 100/mo short
-    expect(spendAt(d, s, 2026)).toMatchObject({emergency: 600, short: 0, spend: 2300});
+    expect(spendAt(d, s, 2026)).toMatchObject({emergency: 600, short: 0, spend: 3200});
     expect(spendAt(d, s, 2028).short).toBeCloseTo(100 * 9 / 12, 8);
-    expect(spendAt(d, s, 2029)).toMatchObject({short: 100, spend: 2400});
+    expect(spendAt(d, s, 2029)).toMatchObject({short: 100, spend: 3300});
   });
 });
 
@@ -321,6 +336,20 @@ describe('pensions and Social Security', () => {
     expect(inv.balance).toBeCloseTo(closedFv(50000, 500, 180, 0.06), 4);
   });
 
+  it('draws each account at its own rate and adds the savings account', () => {
+    const {d, s} = setup();
+    expect(s.rs.draw).toEqual({'acct:a:0': null, 'inv:br': null, 'sav:em': null});
+    const R = retirementIncome(d, s, 65);
+    const acct = R.parts.find((x) => x.kind === 'account')!;
+    const sav = R.parts.find((x) => x.kind === 'savings')!;
+    expect(sav.balance).toBe(500 * 180);                 // $500/mo for 15 years, no interest
+    expect(sav.value).toBeCloseTo(90000 / Math.pow(1.03, 15) * 0.04 / 12, 6);
+    s.rs.draw['acct:a:0'] = 5;
+    const acct5 = retirementIncome(d, s, 65).parts.find((x) => x.kind === 'account')!;
+    expect(acct5.value).toBeCloseTo(acct.value * 5 / 4, 6);
+    expect(incomeAt(d, s, 2041)).toBe(13000);             // savings pay out once retired
+  });
+
   it('scales the pension with real raises', () => {
     const {d, s} = setup();
     const flat = retirementIncome(d, s, 60).parts.find((x) => x.kind === 'pension')!.value;
@@ -350,7 +379,7 @@ describe('spending over time', () => {
     expect(r.ret).toBe(true);
     expect(r.savings).toBe(0);
     expect(r.health).toBe(1200);
-    expect(r.tax).toBe(0);
+    expect(r.annual).toBe(1800);                     // annual expenses continue
   });
 
   it('grows income with raises, then switches to retirement income after tax', () => {
@@ -425,6 +454,20 @@ describe('scenarios', () => {
     expect(rebase(defaults(d), {st: {plan: {Gone: 5}}} as never).st.plan.Gone).toBeUndefined();
   });
 
+  it('rebases and diffs budgets on their own', () => {
+    const {d, s} = setup();
+    const saved = clone(s.st);
+    saved.plan.Groceries = 900;
+    saved.annual = [{name: 'House', amt: 1200}];
+    const defs = clone(s.st);
+    defs.plan.Shopping = 777;
+    const out = rebaseBudget(defs, saved, s.st);
+    expect([out.plan.Groceries, out.plan.Shopping]).toEqual([900, 777]);
+    expect(out.annual).toEqual([{name: 'House', amt: 1200}]);
+    expect(diffBudget(d, s.st, saved).map((x) => x[0])).toEqual(['Planned: Groceries',
+      'Annual expenses']);
+  });
+
   it('upgrades saved amounts from before contribution modes', () => {
     const {d} = setup();
     const out = rebase(defaults(d), {st: {sav: {'inv:br': 300}}} as never);
@@ -446,9 +489,9 @@ describe('scenarios', () => {
     s.rs.age = 62;
     s.cs.k2.school = 'state';
     s.cs.k2.cost = 50000;
-    s.st.on.Furniture = true;
+    s.st.on['Other credits'] = true;
     const c = compact(d, {id: 'x', name: 'n', saved: 't', ...s});
-    expect(c.d).toEqual([[['st', 'on', 'Furniture'], true], [['cs', 'k2', 'cost'], 50000],
+    expect(c.d).toEqual([[['st', 'on', 'Other credits'], true], [['cs', 'k2', 'cost'], 50000],
                          [['rs', 'age'], 62]]);
     expect(flatten(expand(d, c))).toEqual(flatten(s));
   });
@@ -484,7 +527,7 @@ describe('data description', () => {
     p.tx = [['2026-09-01', 'A', 1, 0, 0, 'x'], ['2026-10-01', 'B', 2, 0, 1, 'y']];
     p.household.partners[0].take_home_note = 'pay stub';
     expect(describeData(p)).toBe('Built from Visa card and Checking (2 transactions, Sep 26 – ' +
-        'Oct 26). Take-home pay: Partner A (pay stub). Change any number in the planner to see ' +
+        'Oct 26). Take-home pay: Partner A (pay stub). Change any number in Budgeting to see ' +
         'what it does to the month.');
     p.tx = [];
     expect(describeData(p)).toMatch(/^No transactions yet/);
