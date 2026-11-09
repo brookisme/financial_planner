@@ -67,6 +67,7 @@ export interface Contribution {
   left_pct: number|null;
   min_monthly: number|null;
   max_monthly: number|null;
+  rest: boolean;
 }
 
 /** A savings account or emergency fund. */
@@ -145,6 +146,10 @@ export interface Payload {
   categories: Category[];
   by_cat: number[][];
   tx: Tx[];
+  all_months?: string[];
+  all_month_labels?: string[];
+  all_by_cat?: number[][];
+  other_tx?: Tx[];
   sources: string[];
   household: {partners: Partner[]; children: Child[]};
   children: ChildTimeline[];
@@ -157,26 +162,46 @@ export interface Payload {
 }
 
 /**
- * One contribution line in the planner: a fixed amount per month, or a percent of what is left
- * over each month kept between an optional min and max.
+ * One contribution line in the budget: a fixed amount per month, a percent of what is left over
+ * each month kept between an optional min and max, or an even share of whatever is left after
+ * everything else ('rest').
  */
 export interface SavLine {
-  mode: 'fixed'|'pct';
+  mode: 'fixed'|'pct'|'rest';
   amt: number;
   pct: number;
   min: number|null;
   max: number|null;
 }
 
+/** One annual expense in a budget: a label and its yearly amount. */
+export interface AnnualItem {
+  name: string;
+  amt: number;
+}
+
 /**
- * Planner settings. Keys: `inc` by partner id plus `other`; `sav` by `529:<child>`,
- * `sav:<id>`, `inv:<id>`; `on` (toggles) and `plan` (monthly amounts) by category name.
+ * Budget settings. Keys: `inc` by partner id plus `other`; `sav` by `529:<child>`,
+ * `sav:<id>`, `inv:<id>`; `on` (credit toggles) and `plan` (monthly amounts) by category name.
+ * `annual` is the budget's own list of yearly expenses; `emerg` the emergency fund costs per month
+ * (null: the same as what goes into the emergency funds).
  */
 export interface PlannerState {
   inc: Record<string, number>;
   sav: Record<string, SavLine>;
   on: Record<string, boolean>;
   plan: Record<string, number>;
+  annual: AnnualItem[];
+  emerg: number|null;
+}
+
+/** A saved budget: planner settings only. `base` holds the defaults when it was saved. */
+export interface SavedBudget {
+  id: string;
+  name: string;
+  saved: string;
+  st: PlannerState;
+  base?: PlannerState;
 }
 
 /** College settings per child id. */
@@ -186,7 +211,8 @@ export type CollegeState = Record<string, {school: string; ret: number; inf: num
 /**
  * Retirement settings. `age` is the primary partner's retirement age; `ages` holds the other
  * partners' (null: the same year as the primary). Pension / account keys are
- * `<partner id>:<index>`.
+ * `<partner id>:<index>`. `draw` is each account's yearly withdrawal % (keys `acct:<p>:<i>`,
+ * `inv:<id>`, `sav:<id>`; null: the default `wd`).
  */
 export interface RetireState {
   age: number;
@@ -201,6 +227,7 @@ export interface RetireState {
   pen: Record<string, {on: boolean; est: Record<string, number>; monthly: number|null}>;
   acct: Record<string, {on: boolean; bal: number; monthly: number}>;
   inv: Record<string, {bal: number; ret: number}>;
+  draw: Record<string, number|null>;
 }
 
 /** Spending-over-time settings: % changes by category name. */
