@@ -55,8 +55,10 @@ Ask, for each adult (one or more):
   estimate tool), years of service so far;
 - retirement accounts (401k, 403b, IRA): name, balance, monthly contribution.
 
-The first partner is the "primary": the retirement-age slider is their age. Ask what age they're
-thinking of retiring at (`assumptions.retirement.default_age`).
+The first partner is the "primary": the main retirement-age slider is their age. Ask what age
+each partner is thinking of retiring at: the first partner's goes in
+`assumptions.retirement.default_age`, and another partner who retires in a different year gets
+their own `retirement_age` (leave it out to retire in the same year as the first).
 
 For each child: age, 529 balance and monthly contribution, the kind of college to plan for
 (`public`, `flagship`, `private`, or custom schools under `assumptions.college.schools`), and the
