@@ -68,6 +68,48 @@ def test_offsets_must_point_at_spending_or_one_time() -> None:
             {'name': 'A', 'kind': 'credit', 'offsets': 'B'}, {'name': 'B', 'kind': 'credit'}]})
 
 
+def test_cost_kinds_can_be_offset() -> None:
+    cfg = Config.model_validate({'categories': [
+        {'name': 'Income tax', 'kind': 'annual', 'tax': True},
+        {'name': 'Repairs', 'kind': 'emergency'},
+        {'name': 'Refund', 'kind': 'credit', 'offsets': 'Income tax'},
+        {'name': 'Insurance payout', 'kind': 'credit', 'offsets': 'Repairs'}]})
+    assert [c.kind for c in cfg.categories] == ['annual', 'emergency', 'credit', 'credit']
+
+
+def test_children_get_default_names() -> None:
+    cfg = Config.model_validate({'household': {'children': [
+        {'age': 9}, {'name': 'Riley', 'age': 7}, {'age': 4}]}})
+    assert [c.name for c in cfg.household.children] == ['Child 1', 'Riley', 'Child 3']
+    assert [c.id for c in cfg.household.children] == ['child-1', 'riley', 'child-3']
+
+
+def test_savings_types_and_contributions() -> None:
+    cfg = Config.model_validate({
+        'savings': [{'name': 'Savings account', 'monthly': 300},
+                    {'name': 'Emergency fund', 'type': 'emergency', 'balance': 4000,
+                     'max_balance': 15000, 'overflow_to': 'bonds', 'left_pct': 50,
+                     'min_monthly': 100, 'max_monthly': 800}],
+        'investments': [{'name': 'Stocks'}, {'name': 'Bonds', 'type': 'bonds'}]})
+    sav, emer = cfg.savings
+    assert (sav.type, sav.monthly, sav.left_pct) == ('savings', 300, None)
+    assert (emer.type, emer.max_balance, emer.overflow_to, emer.left_pct) == \
+        ('emergency', 15000, 'bonds', 50)
+    assert [v.type for v in cfg.investments] == ['stocks', 'bonds']
+
+
+def test_overflow_must_name_an_investment() -> None:
+    with pytest.raises(ValueError, match='overflow_to'):
+        Config.model_validate({'savings': [{'name': 'S', 'max_balance': 10,
+                                            'overflow_to': 'nowhere'}]})
+
+
+def test_contribution_min_above_max_is_an_error() -> None:
+    with pytest.raises(ValueError, match='min_monthly'):
+        Config.model_validate({'investments': [{'name': 'Stocks', 'left_pct': 10,
+                                                'min_monthly': 500, 'max_monthly': 100}]})
+
+
 def test_unknown_school_is_an_error() -> None:
     with pytest.raises(ValueError, match='unknown school'):
         Config.model_validate({'household': {'children': [
