@@ -74,6 +74,7 @@
     70: 1.24
   };
   var PROJECTION_YEARS = 35;
+  var COST_KINDS = ["annual", "one_time", "emergency"];
   var Data = class {
     constructor(p) {
       this.p = p;
@@ -83,7 +84,10 @@
       this.index = new Map(this.cats.map((c, i) => [c.name, i]));
       const kind = (k) => this.cats.map((_, i) => i).filter((i) => this.cats[i].kind === k);
       this.regular = kind("spending");
+      this.annual = kind("annual");
       this.oneTime = kind("one_time");
+      this.emergency = kind("emergency");
+      this.costs = [...this.annual, ...this.oneTime, ...this.emergency];
       this.credits = kind("credit");
       this.todayYear = +p.plan.today.slice(0, 4);
       this.todayMonth = +p.plan.today.slice(5, 7);
@@ -122,10 +126,23 @@
     offsetsOf(name) {
       return this.credits.filter((i) => this.cats[i].offsets === name);
     }
-    /** Whether a credit is shown inside the planner table (not nested under a one-time cost). */
+    /** Whether a credit is shown inside the planner table (not nested under a cost toggle). */
     isPlannerCredit(i) {
       const off = this.cats[i].offsets;
-      return !off || this.cats[this.idx(off)]?.kind !== "one_time";
+      const k = this.cats[this.idx(off ?? "")]?.kind;
+      return !off || !COST_KINDS.includes(k);
+    }
+    /** Emergency funds (they pay for emergency costs, in config order). */
+    get funds() {
+      return this.p.savings.filter((s) => s.type === "emergency");
+    }
+    /** Every contribution key: 529s, then savings, then investments. */
+    get savKeys() {
+      return [
+        ...this.children.map((c) => `529:${c.id}`),
+        ...this.p.savings.map((s) => `sav:${s.id}`),
+        ...this.p.investments.map((v) => `inv:${v.id}`)
+      ];
     }
     /** A child's high-school graduation as a fractional year (June 2034 -> 2034.5). */
     gradT(child) {
@@ -138,10 +155,10 @@
     const st = { inc: {}, sav: {}, on: {}, plan: {} };
     d.partners.forEach((x) => st.inc[x.id] = x.take_home_monthly);
     st.inc.other = p.other_income_monthly;
-    d.children.forEach((c) => st.sav[`529:${c.id}`] = c.college_529.monthly);
-    p.savings.forEach((s) => st.sav[`sav:${s.id}`] = s.monthly);
-    p.investments.forEach((v) => st.sav[`inv:${v.id}`] = v.monthly);
-    [...d.oneTime, ...d.credits].forEach((i) => st.on[d.cats[i].name] = d.cats[i].default_on);
+    d.children.forEach((c) => st.sav[`529:${c.id}`] = savLine(c.college_529));
+    p.savings.forEach((s) => st.sav[`sav:${s.id}`] = savLine(s));
+    p.investments.forEach((v) => st.sav[`inv:${v.id}`] = savLine(v));
+    [...d.costs, ...d.credits].forEach((i) => st.on[d.cats[i].name] = d.cats[i].default_on);
     d.regular.forEach((i) => st.plan[d.cats[i].name] = d.avg(i));
     d.credits.filter((i) => d.isPlannerCredit(i)).forEach((i) => st.plan[d.cats[i].name] = d.credAvg(i));
     const col = p.assumptions.college;
@@ -201,6 +218,8 @@
   function rebase(defs, saved2, base) {
     const out = clone(defs);
     if (!saved2) return out;
+    saved2 = upgrade(saved2);
+    base = base && upgrade(base);
     const baseMap = new Map(flatten(base ?? {}).map(([k, v]) => [k, v]));
     const defMap = new Map(flatten(defs).map(([k, v]) => [k, v]));
     for (const [key, value] of flatten(saved2)) {
@@ -255,40 +274,84 @@
     const off = d.offsetsOf(d.cats[i].name).filter((c) => st.on[d.cats[c].name]);
     return d.avg(i) - sum(off.map((c) => d.credAvg(c)));
   }
-  function oneTimeMo(d, st, tax, ret) {
-    return sum(d.oneTime.filter((i) => d.cats[i].tax === tax && st.on[d.cats[i].name] && (!ret || d.cats[i].in_retirement)).map((i) => oneTimeNet(d, st, i)));
+  function costMo(d, st, list, ret) {
+    return sum(list.filter((i) => st.on[d.cats[i].name] && (!ret || d.cats[i].in_retirement)).map((i) => oneTimeNet(d, st, i)));
   }
   function taxMo(d, st, ret = false) {
-    return oneTimeMo(d, st, true, ret);
+    return costMo(d, st, [...d.annual, ...d.oneTime].filter((i) => d.cats[i].tax), ret);
   }
   function extraMo(d, st, ret = false) {
-    return oneTimeMo(d, st, false, ret);
+    return costMo(d, st, [...d.annual, ...d.oneTime].filter((i) => !d.cats[i].tax), ret);
+  }
+  function emergencyMo(d, st, ret = false) {
+    return costMo(d, st, d.emergency, ret);
   }
   function incomeMo(st) {
     return sum(Object.values(st.inc));
   }
-  function investingMo(st) {
-    return sum(Object.entries(st.sav).filter(([k]) => k.startsWith("inv:")).map(([, v]) => v));
+  function savLine(c) {
+    return {
+      mode: c.left_pct == null ? "fixed" : "pct",
+      amt: c.monthly,
+      pct: c.left_pct ?? 0,
+      min: c.min_monthly,
+      max: c.max_monthly
+    };
+  }
+  function contributions(lines, free) {
+    const amt = {};
+    let base = free;
+    lines.forEach(([k, l]) => {
+      if (l && l.mode !== "pct") {
+        amt[k] = l.amt;
+        base -= l.amt;
+      }
+    });
+    let left = base;
+    lines.forEach(([k, l]) => {
+      if (l?.mode !== "pct") return;
+      let v = Math.max(0, base) * l.pct / 100;
+      if (l.min != null) v = Math.max(v, l.min);
+      if (l.max != null) v = Math.min(v, l.max);
+      amt[k] = v;
+      left -= v;
+    });
+    return { amt, left };
+  }
+  function overflowTarget(d, sv) {
+    if (sv.max_balance == null) return null;
+    return sv.overflow_to ?? d.p.investments[0]?.id ?? null;
   }
   function budget(d, st) {
     const income = incomeMo(st);
     const regular = regularMo(d, st);
     const credits = creditsMo(d, st);
     const extra = extraMo(d, st);
-    const spend = regular - credits + extra;
-    const allSav = sum(Object.values(st.sav));
-    const investing = investingMo(st);
+    const emergency = emergencyMo(d, st);
+    const spend = regular - credits + extra + (d.funds.length ? 0 : emergency);
     const tax = taxMo(d, st);
+    const { amt, left } = contributions(d.savKeys.map((k) => [k, st.sav[k]]), income - spend - tax);
+    const overflow = {};
+    d.p.savings.forEach((sv) => {
+      const to = overflowTarget(d, sv);
+      if (to && sv.balance >= sv.max_balance) overflow[`sav:${sv.id}`] = to;
+    });
+    const isInv = (k) => k.startsWith("inv:") || k in overflow;
+    const investing = sum(Object.entries(amt).filter(([k]) => isInv(k)).map(([, v]) => v));
+    const savings = sum(Object.entries(amt).filter(([k]) => !isInv(k)).map(([, v]) => v));
     return {
       income,
       regular,
       credits,
       extra,
+      emergency,
       spend,
-      savings: allSav - investing,
+      savings,
       investing,
       tax,
-      left: income - spend - allSav - tax
+      amt,
+      overflow,
+      left
     };
   }
   function fv(p, m, n, r) {
@@ -301,11 +364,10 @@
     const child = d.children[k];
     const tl = d.timelines[k];
     const c = s.cs[child.id];
-    const m = s.st.sav[`529:${child.id}`] ?? 0;
     const r = c.ret / 100;
     const g = c.inf / 100;
     const months = tl.months_to_graduation;
-    const bal = fv(child.college_529.balance, m, months, r);
+    const bal = simulate(d, s).at[`529:${child.id}`];
     let cost = 0;
     for (let j = 0; j < d.p.assumptions.college.years; j++) {
       cost += c.cost * Math.pow(1 + g, tl.years_to_college + j);
@@ -352,135 +414,182 @@
     return Math.max(first, ...d.partners.map((p) => partnerRetireYear(d, rs, p, a)));
   }
   function retirementIncome(d, s, a) {
-    const rs = s.rs;
-    const year = retireYear(d, rs, a);
-    const yrs = Math.max(a - d.primary.age, ...d.partners.map((p) => partnerRetireAge(d, rs, p, a) - p.age));
-    const r = rs.ret / 100;
-    const real = (y) => Math.pow(1 + rs.inf / 100, y);
-    const wd = rs.wd / 100 / 12;
-    const parts = [];
-    const ages = {};
-    const years = {};
-    d.partners.forEach((p) => {
-      const ageR = partnerRetireAge(d, rs, p, a);
-      const pYrs = ageR - p.age;
-      ages[p.id] = ageR;
-      years[p.id] = partnerRetireYear(d, rs, p, a);
-      p.pensions.forEach((pn, i) => {
-        const key = `${p.id}:${i}`;
-        const st = rs.pen[key];
-        if (!st?.on) return;
-        let v = st.monthly != null ? st.monthly : interpolatePension(st.est, ageR, p.age, pn.service_years_now);
-        if (pn.grows_with_raises) {
-          v *= Math.pow(1 + (rs.raise[p.id] ?? 0) / 100, Math.max(0, ageR - p.age - 1.5));
-        }
-        parts.push({ kind: "pension", key, name: pn.name, partner: p.id, value: v, started: true });
-      });
-      p.accounts.forEach((ac, i) => {
-        const key = `${p.id}:${i}`;
-        const st = rs.acct[key];
-        if (!st?.on) return;
-        const bal = fv(st.bal, st.monthly, Math.round(pYrs * 12), r);
-        parts.push({
-          kind: "account",
-          key,
-          name: ac.name,
-          partner: p.id,
-          value: bal / real(pYrs) * wd,
-          balance: bal,
-          yrs: pYrs,
-          started: true
-        });
-      });
-    });
-    d.p.investments.forEach((v) => {
-      const st = rs.inv[v.id];
-      if (!st) return;
-      const bal = fv(st.bal, s.st.sav[`inv:${v.id}`] ?? 0, Math.round(yrs * 12), st.ret / 100);
-      if (bal <= 0) return;
-      parts.push({
-        kind: "investment",
-        key: v.id,
-        name: v.name,
-        partner: "",
-        value: bal / real(yrs) * wd,
-        balance: bal,
-        yrs,
-        started: true
-      });
-    });
-    if (rs.ss) {
-      d.partners.forEach((p) => {
-        const ageR = ages[p.id];
-        const want = rs.claim[p.id];
-        const claimAge = want == null ? Math.max(62, ageR) : Math.min(70, Math.max(want, ageR));
-        const value = (rs.ssAmt[p.id] ?? 0) * ssFactor(claimAge);
-        if (!value) return;
-        const ageThen = ageR + year - years[p.id];
-        parts.push({
-          kind: "ss",
-          key: p.id,
-          name: `${p.name} Social Security`,
-          partner: p.id,
-          value,
-          started: ageThen >= claimAge - 0.01,
-          claimAge,
-          start: yearAtAge(d, p, Math.ceil(claimAge - 0.01))
-        });
-      });
-    }
+    const base = baseRetirement(d, s, a);
+    const inv = investmentParts(d, s, base.yrs, simulate(d, s, a).at);
+    const parts = [
+      ...base.parts.filter((x) => x.kind !== "ss"),
+      ...inv,
+      ...base.parts.filter((x) => x.kind === "ss")
+    ];
     const total = sum(parts.filter((x) => x.started).map((x) => x.value));
     const pending = parts.filter((x) => !x.started);
     const later = sum(pending.map((x) => x.value));
     return {
-      age: a,
-      yrs,
-      year,
-      years,
+      ...base,
       parts,
       total,
       later,
       full: total + later,
-      fullYear: Math.max(0, ...pending.map((x) => x.start ?? 0)),
-      ages
+      fullYear: Math.max(0, ...pending.map((x) => x.start ?? 0))
     };
   }
   function spendAt(d, s, y) {
-    const { st, fs } = s;
-    const t = y + 0.5;
-    const total = d.children.length;
-    const kids = d.children.filter((_, k) => t < d.gradT(k)).length;
-    const gone = total ? (total - kids) / total : 0;
-    const ret = y >= retireYear(d, s.rs);
-    const cats = {};
-    let living = 0;
-    d.regular.forEach((i) => {
-      const n = d.cats[i].name;
-      let v = (st.plan[n] ?? 0) * Math.max(0, 1 + gone * (fs.kg[n] ?? 0) / 100);
-      if (ret) v *= Math.max(0, 1 + (fs.rt[n] ?? 0) / 100);
-      cats[n] = v;
-      living += v;
-    });
-    living += extraMo(d, st, ret) - creditsMo(d, st, ret);
-    const tax = taxMo(d, st, ret);
-    const health = ret ? fs.health : 0;
-    let savings = 0;
-    d.children.forEach((c, k) => {
-      if (t < d.gradT(k)) savings += st.sav[`529:${c.id}`] ?? 0;
-    });
-    d.p.savings.forEach((sv) => {
-      if (!(ret && sv.stops_at_retirement)) savings += st.sav[`sav:${sv.id}`] ?? 0;
-    });
-    if (!ret) savings += investingMo(st);
-    return { y, kids, ret, cats, living, tax, health, spend: living + tax + health, savings };
+    const x = spendingAt(d, s, y, retireYear(d, s.rs));
+    const sy = simulate(d, s).years.get(y);
+    const short = sy?.short ?? 0;
+    return { ...x, short, spend: x.spend + short, savings: sy?.saved ?? 0 };
   }
   function incomeAt(d, s, y) {
-    const { st, rs, fs } = s;
-    const R = retirementIncome(d, s, rs.age);
-    const n = Math.max(0, y - d.todayYear);
-    const pay = sum(d.partners.filter((p) => y < R.years[p.id]).map((p) => (st.inc[p.id] ?? 0) * Math.pow(1 + (rs.raise[p.id] ?? 0) / 100, n))) + (y < R.year ? st.inc.other ?? 0 : 0);
-    const paid = sum(R.parts.filter((x) => x.kind === "investment" ? y >= R.year : y >= R.years[x.partner] && (x.kind !== "ss" || y >= (x.start ?? 0))).map((x) => x.value));
-    return pay + paid * (1 - fs.tax / 100);
+    return incomeFrom(d, s, retirementIncome(d, s, s.rs.age), y);
+  }
+  function simulate(d, s, a = s.rs.age) {
+    const key = JSON.stringify([s.st, s.cs, s.rs, s.fs.health, s.fs.tax, s.fs.kg, s.fs.rt, a]);
+    let memo = SIM_CACHE.get(d);
+    if (!memo) SIM_CACHE.set(d, memo = /* @__PURE__ */ new Map());
+    const hit = memo.get(key);
+    if (hit) return hit;
+    const { st, rs, cs } = s;
+    const base = baseRetirement(d, s, a);
+    const RY = base.year;
+    const invMonth = Math.round(base.yrs * 12);
+    const start2 = d.todayMonth - 1;
+    const n = (Math.max(d.todayYear + PROJECTION_YEARS, RY + 1) - d.todayYear) * 12 - start2;
+    const mr = (pct) => Math.pow(1 + pct / 100, 1 / 12) - 1;
+    const accts = [
+      ...d.children.map((c, k) => ({
+        key: `529:${c.id}`,
+        bal: c.college_529.balance,
+        i: mr(cs[c.id]?.ret ?? 0),
+        until: d.timelines[k].months_to_graduation,
+        stops: false,
+        cap: null,
+        to: null,
+        fund: false
+      })),
+      ...d.p.savings.map((sv) => {
+        const to = overflowTarget(d, sv);
+        return {
+          key: `sav:${sv.id}`,
+          bal: sv.balance,
+          i: mr(sv.return_pct),
+          until: Infinity,
+          stops: sv.stops_at_retirement,
+          cap: sv.max_balance,
+          to: to && `inv:${to}`,
+          fund: sv.type === "emergency"
+        };
+      }),
+      ...d.p.investments.map((v) => ({
+        key: `inv:${v.id}`,
+        bal: rs.inv[v.id]?.bal ?? v.balance,
+        i: mr(rs.inv[v.id]?.ret ?? v.return_pct),
+        until: Infinity,
+        stops: true,
+        cap: null,
+        to: null,
+        fund: false
+      }))
+    ];
+    const byKey = new Map(accts.map((x) => [x.key, x]));
+    const at = {};
+    const full = {};
+    accts.forEach((x) => {
+      if (x.cap != null) full[x.key] = x.bal >= x.cap - 0.5 ? d.todayYear : null;
+    });
+    const years = /* @__PURE__ */ new Map();
+    let inv = null;
+    const flows = /* @__PURE__ */ new Map();
+    const flowsAt = (y) => {
+      let f = flows.get(y);
+      if (!f) {
+        const x = spendingAt(d, s, y, RY);
+        if (y >= RY && !inv) inv = investmentParts(d, s, base.yrs, snapshot("inv:"));
+        const income = incomeFrom(d, s, { ...base, parts: [...base.parts, ...inv ?? []] }, y);
+        f = { free: income - x.spend, emergency: x.emergency };
+        flows.set(y, f);
+      }
+      return f;
+    };
+    const snapshot = (prefix) => {
+      accts.filter((x) => x.key.startsWith(prefix) && !(x.key in at)).forEach((x) => at[x.key] = x.bal);
+      return at;
+    };
+    for (let m = 0; m < n; m++) {
+      const y = d.todayYear + Math.floor((start2 + m) / 12);
+      const ret = y >= RY;
+      accts.forEach((x) => {
+        if (x.key.startsWith("529:") && m === x.until) at[x.key] = x.bal;
+      });
+      if (m === invMonth) snapshot("inv:");
+      const f = flowsAt(y);
+      let need = f.emergency;
+      accts.filter((x) => x.fund).forEach((x) => {
+        const take = Math.min(Math.max(0, x.bal), need);
+        x.bal -= take;
+        need -= take;
+      });
+      const active = accts.filter((x) => m < x.until && !(ret && x.stops));
+      const c = contributions(active.map((x) => [x.key, st.sav[x.key]]), f.free - need);
+      accts.forEach((x) => x.bal *= 1 + x.i);
+      let overflow = 0;
+      let kept = 0;
+      active.forEach((x) => {
+        let v = c.amt[x.key] ?? 0;
+        if (x.cap != null) {
+          const into = Math.max(0, Math.min(v, x.cap - x.bal));
+          const spill = v - into;
+          v = into;
+          const target = x.to ? byKey.get(x.to) : void 0;
+          if (spill > 0 && target) {
+            target.bal += spill;
+            overflow += spill;
+          } else {
+            kept += spill;
+          }
+        }
+        x.bal += v;
+        if (x.cap != null && full[x.key] == null && x.bal >= x.cap - 0.5) full[x.key] = y;
+      });
+      let yr = years.get(y);
+      if (!yr) {
+        yr = {
+          y,
+          months: 0,
+          saved: 0,
+          contrib: {},
+          overflow: 0,
+          emergency: 0,
+          short: 0,
+          left: 0,
+          bal: {}
+        };
+        years.set(y, yr);
+      }
+      yr.months++;
+      Object.entries(c.amt).forEach(([k, v]) => yr.contrib[k] = (yr.contrib[k] ?? 0) + v);
+      yr.saved += sum(Object.values(c.amt)) - kept;
+      yr.overflow += overflow;
+      yr.emergency += f.emergency - need;
+      yr.short += need;
+      yr.left += c.left + kept;
+      accts.forEach((x) => yr.bal[x.key] = x.bal);
+    }
+    accts.forEach((x) => {
+      if (!(x.key in at)) at[x.key] = x.bal;
+    });
+    years.forEach((yr) => {
+      const k = yr.months;
+      Object.keys(yr.contrib).forEach((c) => yr.contrib[c] /= k);
+      yr.saved /= k;
+      yr.overflow /= k;
+      yr.emergency /= k;
+      yr.short /= k;
+      yr.left /= k;
+    });
+    const sim = { years, at, full };
+    if (memo.size > 200) memo.clear();
+    memo.set(key, sim);
+    return sim;
   }
   function deflator(d, s, y) {
     return s.fs.nominal ? Math.pow(1 + s.rs.inf / 100, y - d.todayYear) : 1;
@@ -570,10 +679,16 @@
       if (k === "inc") return sub === "other" ? "Other income" : `${who(sub)} take-home`;
       if (k === "sav") {
         const [type, id] = [sub.slice(0, sub.indexOf(":")), sub.slice(sub.indexOf(":") + 1)];
-        if (type === "529") return `529, ${kid(id)}`;
         const list = type === "inv" ? d.p.investments : d.p.savings;
-        const name = list.find((x) => x.id === id)?.name ?? id;
-        return type === "inv" ? `${name} per month` : name;
+        const name = type === "529" ? `529, ${kid(id)}` : list.find((x) => x.id === id)?.name ?? id;
+        const what = {
+          mode: "contribution",
+          amt: "per month",
+          pct: "share of left-over",
+          min: "at least per month",
+          max: "at most per month"
+        };
+        return `${name}: ${what[leaf] ?? leaf}`;
       }
       if (k === "on") return catLabel(sub);
       if (k === "plan") return `Planned: ${sub}`;
@@ -621,7 +736,11 @@
   }
   function settingVal(d, path, v) {
     if (v === void 0) return "\u2013";
-    if (v === null) return path[1] === "ages" ? `same year as ${d.primary.name}` : "at retirement";
+    if (v === null) {
+      if (path[1] === "sav") return "none";
+      return path[1] === "ages" ? `same year as ${d.primary.name}` : "at retirement";
+    }
+    if (path[1] === "sav" && path[3] === "mode") return v === "pct" ? "% of left-over" : "fixed";
     if (typeof v === "boolean") return v ? "On" : "Off";
     if (path[0] === "cs" && path[2] === "school") {
       return d.p.assumptions.college.schools[String(v)]?.name ?? String(v);
@@ -653,19 +772,155 @@
     const out = clone(defs);
     const known = new Set(flatten(defs).map(([k]) => k));
     (c.d ?? []).forEach(([path, v]) => {
+      if (path[1] === "sav" && path.length === 3 && typeof v === "number") path = [...path, "amt"];
       if (known.has(JSON.stringify(path))) setPath(out, path, v);
     });
     return out;
   }
+  var SIM_CACHE = /* @__PURE__ */ new WeakMap();
   var SKIP = /* @__PURE__ */ new Set([JSON.stringify(["fs", "nominal"])]);
   var PCT_KEYS = /* @__PURE__ */ new Set(["raise", "ret", "inf", "wd", "tax"]);
   function isPct(path) {
     if (path[0] === "rs" && path[1] === "inv") return path[3] === "ret";
     if (path[0] === "cs") return path[2] === "ret" || path[2] === "inf";
+    if (path[1] === "sav") return path[3] === "pct";
     return path[0] !== "st" && PCT_KEYS.has(path[1]);
   }
   function same(a, b) {
     return a === b || JSON.stringify(a) === JSON.stringify(b);
+  }
+  function upgrade(s) {
+    const sav = s.st?.sav;
+    if (!sav || !Object.values(sav).some((v) => typeof v === "number")) return s;
+    const out = clone(s);
+    const o = out.st.sav;
+    Object.entries(o).forEach(([k, v]) => {
+      if (typeof v === "number") o[k] = { mode: "fixed", amt: v };
+    });
+    return out;
+  }
+  function baseRetirement(d, s, a) {
+    const rs = s.rs;
+    const year = retireYear(d, rs, a);
+    const yrs = Math.max(a - d.primary.age, ...d.partners.map((p) => partnerRetireAge(d, rs, p, a) - p.age));
+    const r = rs.ret / 100;
+    const real = (y) => Math.pow(1 + rs.inf / 100, y);
+    const wd = rs.wd / 100 / 12;
+    const parts = [];
+    const ages = {};
+    const years = {};
+    d.partners.forEach((p) => {
+      const ageR = partnerRetireAge(d, rs, p, a);
+      const pYrs = ageR - p.age;
+      ages[p.id] = ageR;
+      years[p.id] = partnerRetireYear(d, rs, p, a);
+      p.pensions.forEach((pn, i) => {
+        const key = `${p.id}:${i}`;
+        const st = rs.pen[key];
+        if (!st?.on) return;
+        let v = st.monthly != null ? st.monthly : interpolatePension(st.est, ageR, p.age, pn.service_years_now);
+        if (pn.grows_with_raises) {
+          v *= Math.pow(1 + (rs.raise[p.id] ?? 0) / 100, Math.max(0, ageR - p.age - 1.5));
+        }
+        parts.push({ kind: "pension", key, name: pn.name, partner: p.id, value: v, started: true });
+      });
+      p.accounts.forEach((ac, i) => {
+        const key = `${p.id}:${i}`;
+        const st = rs.acct[key];
+        if (!st?.on) return;
+        const bal = fv(st.bal, st.monthly, Math.round(pYrs * 12), r);
+        parts.push({
+          kind: "account",
+          key,
+          name: ac.name,
+          partner: p.id,
+          value: bal / real(pYrs) * wd,
+          balance: bal,
+          yrs: pYrs,
+          started: true
+        });
+      });
+    });
+    if (rs.ss) {
+      d.partners.forEach((p) => {
+        const ageR = ages[p.id];
+        const want = rs.claim[p.id];
+        const claimAge = want == null ? Math.max(62, ageR) : Math.min(70, Math.max(want, ageR));
+        const value = (rs.ssAmt[p.id] ?? 0) * ssFactor(claimAge);
+        if (!value) return;
+        const ageThen = ageR + year - years[p.id];
+        parts.push({
+          kind: "ss",
+          key: p.id,
+          name: `${p.name} Social Security`,
+          partner: p.id,
+          value,
+          started: ageThen >= claimAge - 0.01,
+          claimAge,
+          start: yearAtAge(d, p, Math.ceil(claimAge - 0.01))
+        });
+      });
+    }
+    return { age: a, yrs, year, years, ages, parts };
+  }
+  function investmentParts(d, s, yrs, bals) {
+    const real = Math.pow(1 + s.rs.inf / 100, yrs);
+    const wd = s.rs.wd / 100 / 12;
+    const out = [];
+    d.p.investments.forEach((v) => {
+      const bal = bals[`inv:${v.id}`] ?? 0;
+      if (!s.rs.inv[v.id] || bal <= 0) return;
+      out.push({
+        kind: "investment",
+        key: v.id,
+        name: v.name,
+        partner: "",
+        value: bal / real * wd,
+        balance: bal,
+        yrs,
+        started: true
+      });
+    });
+    return out;
+  }
+  function incomeFrom(d, s, R, y) {
+    const { st, rs, fs } = s;
+    const n = Math.max(0, y - d.todayYear);
+    const pay = sum(d.partners.filter((p) => y < R.years[p.id]).map((p) => (st.inc[p.id] ?? 0) * Math.pow(1 + (rs.raise[p.id] ?? 0) / 100, n))) + (y < R.year ? st.inc.other ?? 0 : 0);
+    const paid = sum(R.parts.filter((x) => x.kind === "investment" ? y >= R.year : y >= R.years[x.partner] && (x.kind !== "ss" || y >= (x.start ?? 0))).map((x) => x.value));
+    return pay + paid * (1 - fs.tax / 100);
+  }
+  function spendingAt(d, s, y, retYear) {
+    const { st, fs } = s;
+    const t = y + 0.5;
+    const total = d.children.length;
+    const kids = d.children.filter((_, k) => t < d.gradT(k)).length;
+    const gone = total ? (total - kids) / total : 0;
+    const ret = y >= retYear;
+    const cats = {};
+    let living = 0;
+    d.regular.forEach((i) => {
+      const n = d.cats[i].name;
+      let v = (st.plan[n] ?? 0) * Math.max(0, 1 + gone * (fs.kg[n] ?? 0) / 100);
+      if (ret) v *= Math.max(0, 1 + (fs.rt[n] ?? 0) / 100);
+      cats[n] = v;
+      living += v;
+    });
+    const em = emergencyMo(d, st, ret);
+    living += extraMo(d, st, ret) - creditsMo(d, st, ret) + (d.funds.length ? 0 : em);
+    const tax = taxMo(d, st, ret);
+    const health = ret ? fs.health : 0;
+    return {
+      y,
+      kids,
+      ret,
+      cats,
+      living,
+      tax,
+      health,
+      emergency: d.funds.length ? em : 0,
+      spend: living + tax + health
+    };
   }
 
   // src/app.ts
@@ -1097,7 +1352,7 @@
   function buildExplorer() {
     const d = app.d;
     monthOf = new Map(d.p.months.map((m, i) => [m, i]));
-    spendOT = d.oneTime;
+    spendOT = d.costs;
     credCats = d.credits;
     REG_M = d.p.months.map((_, m) => sum(d.regular.map((c) => d.byCat[c][m])));
     OT_M = d.p.months.map((_, m) => sum(spendOT.map((c) => d.byCat[c][m])));
@@ -1382,7 +1637,8 @@
       el.value = String(S.st.inc[el.dataset.inc] ?? 0);
     });
     document.querySelectorAll("[data-sav]").forEach((el) => {
-      el.value = String(S.st.sav[el.dataset.sav] ?? 0);
+      const v = S.st.sav[el.dataset.sav]?.[el.dataset.f];
+      el.value = v == null ? "" : String(v);
     });
   }
   function buildTable() {
@@ -1464,24 +1720,20 @@
         id="${attr}-${esc(key)}" data-${attr}="${esc(key)}" type="number" step="50"
         inputmode="decimal"></div>`;
     $("inc-rows").innerHTML = d.partners.map((x) => row(x.id, "inc", x.name, x.take_home_note)).join("") + row("other", "inc", "Other income");
-    $("sav-rows").innerHTML = d.children.map((c) => row(`529:${c.id}`, "sav", `529, ${c.name}`)).join("") + p.savings.map((s) => row(`sav:${s.id}`, "sav", s.name)).join("") + p.investments.map((v) => row(`inv:${v.id}`, "sav", v.name, "investing")).join("");
-    $("sav-note").textContent = (d.children.length ? "529 contributions stop at each child's high school graduation. " : "") + (p.investments.length ? "Investments are added to their balance in Retirement and stop at retirement." : "");
-    const ot = d.oneTime.map((i) => {
-      const cat = d.cats[i];
-      const total = sum(d.byCat[i]);
-      const label2 = cat.label || `Include ${cat.name.toLowerCase()}`;
-      let h = `<label class="toggle"><input type="checkbox" data-tg="${esc(cat.name)}"><span>${esc(label2)} <span class="num">${fmt(d.avg(i))}</span>/mo <span class="small muted">(${fmt(total)} over ${d.n} months${cat.note ? `; ${esc(cat.note)}` : ""})</span></span></label>`;
-      d.offsetsOf(cat.name).forEach((c) => {
-        const cc = d.cats[c];
-        h += `<label class="toggle" style="padding-left:24px"><input type="checkbox"
-        data-tg="${esc(cc.name)}" data-parent="${esc(cat.name)}"><span>${esc(cc.label || `Subtract ${cc.name.toLowerCase()}`)} <span class="num">${fmt(d.credAvg(c))}</span>/mo <span class="small muted">(${fmt(-sum(d.byCat[c]))}${cc.note ? `; ${esc(cc.note)}` : ""}). Net: <span class="num" id="ot-net-${i}"></span>/mo
-        </span></span></label>`;
-      });
-      return h;
-    }).join("");
-    $("ot-rows").innerHTML = ot;
-    $("ot-panel").hidden = !d.oneTime.length;
-    const side = $("ot-rows").parentElement.parentElement;
+    const kind = { stocks: "stocks", bonds: "bonds", savings: "savings", emergency: "emergency fund" };
+    $("sav-rows").innerHTML = d.children.map((c) => savRow(`529:${c.id}`, `529, ${c.name}`)).join("") + p.savings.map((s) => savRow(`sav:${s.id}`, s.name, kind[s.type])).join("") + p.investments.map((v) => savRow(`inv:${v.id}`, v.name, kind[v.type])).join("");
+    $("sav-note").textContent = [
+      d.children.length ? "529 contributions stop at each child's high school graduation." : "",
+      p.investments.length ? "Investments are added to their balance in Retirement and stop at retirement." : "",
+      '"% left" puts in a share of what is left each month after spending, taxes and the fixed amounts.'
+    ].filter(Boolean).join(" ");
+    COST_KINDS.forEach((k) => {
+      const list = k === "annual" ? d.annual : k === "one_time" ? d.oneTime : d.emergency;
+      const panel = $(`cost-${k}`);
+      panel.hidden = !list.length;
+      panel.querySelector(".cost-rows").innerHTML = list.map(costToggle).join("");
+    });
+    const side = $("sav-rows").closest(".side");
     bindToggles(side);
     side.querySelectorAll("[data-inc]").forEach((el) => {
       el.addEventListener("input", () => {
@@ -1491,7 +1743,16 @@
     });
     side.querySelectorAll("[data-sav]").forEach((el) => {
       el.addEventListener("input", () => {
-        app.S.st.sav[el.dataset.sav] = num(el);
+        const f = el.dataset.f;
+        const line = app.S.st.sav[el.dataset.sav];
+        if (f === "min" || f === "max") line[f] = el.value === "" ? null : num(el);
+        else line[f] = num(el);
+        changed();
+      });
+    });
+    side.querySelectorAll("[data-mode]").forEach((b) => {
+      b.addEventListener("click", () => {
+        app.S.st.sav[b.dataset.key].mode = b.dataset.mode;
         changed();
       });
     });
@@ -1552,7 +1813,7 @@
     const td = $("t-d");
     td.textContent = dT ? (dT > 0 ? "+" : "\u2212") + fmt(Math.abs(dT)) : "";
     td.className = `delta num ${dT > 0 ? "neg" : dT < 0 ? "pos" : ""}`;
-    d.oneTime.forEach((i) => {
+    d.costs.forEach((i) => {
       const el = document.getElementById(`ot-net-${i}`);
       if (el) el.textContent = fmt(oneTimeNet(d, st, i));
       const on = !!st.on[d.cats[i].name];
@@ -1561,7 +1822,68 @@
         sub.parentElement.classList.toggle("pane-off", !on);
       });
     });
+    updateSavings();
     updateStrip();
+  }
+  function savRow(key, label2, note = "") {
+    const k = esc(key);
+    if (label2.toLowerCase().includes(note)) note = "";
+    const inp = (f, cls, aria, step = 50) => `<input class="${cls}"
+    type="number" step="${step}" inputmode="decimal" data-sav="${k}" data-f="${f}"
+    aria-label="${esc(label2)} ${aria}">`;
+    return `<div class="savline" data-line="${k}"><div class="row"><span>${esc(label2)}${note ? ` <span class="small muted">\xB7 ${esc(note)}</span>` : ""}</span><span class="ctls"><span
+      class="seg sm" role="group" aria-label="${esc(label2)} contribution type"><button
+      type="button" data-key="${k}" data-mode="fixed">$/mo</button><button type="button"
+      data-key="${k}" data-mode="pct">% left</button></span><span data-show="fixed">${inp("amt", "amt", "per month")}</span><span data-show="pct">${inp("pct", "amt pct", "percent of left-over", 5)}%</span></span></div>
+    <div class="pctrow" data-show="pct">min ${inp("min", "amt", "at least per month")} max ${inp("max", "amt", "at most per month")} <span class="num" data-out="${k}"></span></div>
+    <span class="small muted" data-note="${k}"></span></div>`;
+  }
+  function costToggle(i) {
+    const d = app.d;
+    const cat = d.cats[i];
+    const total = sum(d.byCat[i]);
+    const label2 = cat.label || `Include ${cat.name.toLowerCase()}`;
+    let h = `<label class="toggle"><input type="checkbox" data-tg="${esc(cat.name)}"><span>${esc(label2)} <span class="num">${fmt(d.avg(i))}</span>/mo <span class="small muted">(${fmt(total)} over ${d.n} months${cat.note ? `; ${esc(cat.note)}` : ""})</span></span></label>`;
+    d.offsetsOf(cat.name).forEach((c) => {
+      const cc = d.cats[c];
+      h += `<label class="toggle" style="padding-left:24px"><input type="checkbox"
+      data-tg="${esc(cc.name)}" data-parent="${esc(cat.name)}"><span>${esc(cc.label || `Subtract ${cc.name.toLowerCase()}`)} <span class="num">${fmt(d.credAvg(c))}</span>/mo <span class="small muted">(${fmt(-sum(d.byCat[c]))}${cc.note ? `; ${esc(cc.note)}` : ""}). Net: <span class="num" id="ot-net-${i}"></span>/mo
+      </span></span></label>`;
+    });
+    return h;
+  }
+  function updateSavings() {
+    const { d, S } = app;
+    const b = budget(d, S.st);
+    const sim = simulate(d, S);
+    const invName = (id) => d.p.investments.find((v) => v.id === id)?.name ?? id;
+    document.querySelectorAll("[data-line]").forEach((el) => {
+      const key = el.dataset.line;
+      const line = S.st.sav[key];
+      el.querySelectorAll("[data-mode]").forEach((btn) => {
+        btn.setAttribute("aria-pressed", String(btn.dataset.mode === line.mode));
+      });
+      el.querySelectorAll("[data-show]").forEach((x) => {
+        x.hidden = x.dataset.show !== line.mode;
+      });
+      el.querySelector("[data-out]").textContent = `= ${fmt(b.amt[key] ?? 0)}/mo`;
+      const note = [];
+      const sv = d.p.savings.find((x) => `sav:${x.id}` === key);
+      if (sv) {
+        note.push(`${fmt(sv.balance)} today${sv.max_balance != null ? ` of ${fmt(sv.max_balance)} max` : ""}`);
+        if (sv.max_balance != null) {
+          const full = sim.full[key];
+          const to = overflowTarget(d, sv);
+          note.push(full == null ? "won't reach the max at this rate" : full <= d.todayYear ? "at the max" : `reaches the max in ${full}`);
+          if (to) note.push(`then goes to ${invName(to)}`);
+        }
+      }
+      el.querySelector("[data-note]").textContent = note.join(" \xB7 ");
+    });
+    if (d.emergency.length) {
+      const names = d.funds.map((f) => f.name);
+      $("em-note").textContent = names.length ? `${fmt(b.emergency)}/mo is paid from ${names.join(" and ")}, not the monthly budget. Whatever the fund can't cover comes out of that month (see Spending over time).` : "No emergency fund in Settings \u203A Savings & income, so these count as monthly spending.";
+    }
   }
   function updateStrip() {
     const { d, S } = app;
@@ -1570,15 +1892,15 @@
     $("s-inc").textContent = fmt(b.income);
     $("s-inc-note").textContent = `${d.partners.map((x) => x.name).join(" + ") || "Household"}, net`;
     $("s-sp").textContent = fmt(b.spend);
-    const extras = d.oneTime.filter((i) => !d.cats[i].tax && st.on[d.cats[i].name]).map((i) => `incl. ${d.cats[i].name.toLowerCase()}`);
+    const extras = [...d.annual, ...d.oneTime].filter((i) => !d.cats[i].tax && st.on[d.cats[i].name]).map((i) => `incl. ${d.cats[i].name.toLowerCase()}`);
     $("s-sp-note").textContent = [b.credits ? "after credits" : "regular categories", ...extras].join(" \xB7 ");
     $("s-sv").textContent = fmt(b.savings + b.investing);
     const parts = [];
     if (d.children.length) parts.push("529s");
     d.p.savings.forEach((s) => parts.push(s.name));
-    if (b.investing) parts.push("investments");
+    if (b.investing) parts.push("investing");
     $("s-sv-note").textContent = parts.join(" + ") || "none set";
-    const taxCats = d.oneTime.filter((i) => d.cats[i].tax && st.on[d.cats[i].name]);
+    const taxCats = [...d.annual, ...d.oneTime].filter((i) => d.cats[i].tax && st.on[d.cats[i].name]);
     $("s-tx").textContent = taxCats.length ? fmt(b.tax) : "off";
     const nested = taxCats.flatMap((i) => d.offsetsOf(d.cats[i].name)).filter((c) => st.on[d.cats[c].name]);
     $("s-tx-note").textContent = (taxCats.length ? taxCats.map((i) => d.cats[i].name.toLowerCase()).join(" + ") : "none set aside") + (nested.length ? `, after ${nested.map((c) => d.cats[c].name.toLowerCase()).join(", ")}` : "");
@@ -1621,7 +1943,7 @@
       const cs = () => app.S.cs[c.id];
       const card = $(`kid-${c.id}`);
       $in(`kc-${c.id}`).addEventListener("input", (e) => {
-        app.S.st.sav[`529:${c.id}`] = num(e.target);
+        app.S.st.sav[`529:${c.id}`].amt = num(e.target);
         fillPlanner();
         changed();
       });
@@ -1661,10 +1983,13 @@
     const col = d.p.assumptions.college;
     d.children.forEach((c, k) => {
       const s = app.S.cs[c.id];
-      const m = app.S.st.sav[`529:${c.id}`] ?? 0;
+      const pct = app.S.st.sav[`529:${c.id}`]?.mode === "pct";
+      const m = budget(d, app.S.st).amt[`529:${c.id}`] ?? 0;
       const card = $(`kid-${c.id}`);
       const kc = $in(`kc-${c.id}`);
-      if (document.activeElement !== kc) kc.value = String(m);
+      kc.disabled = pct;
+      kc.title = pct ? "A share of the left-over: change it in the planner's Savings box" : "";
+      if (document.activeElement !== kc) kc.value = String(Math.round(m));
       const ky = $in(`ky-${c.id}`);
       if (document.activeElement !== ky) ky.value = String(s.cost);
       $in(`kr-${c.id}`).value = String(s.ret);
@@ -1679,12 +2004,12 @@
         cb.checked = p.return_pct === s.ret && p.inflation_pct === s.inf;
       });
       const x = kidCalc(d, app.S, k);
-      const pct = Math.round(x.pct * 100);
+      const cov = Math.round(x.pct * 100);
       $(`ko-${c.id}`).innerHTML = `
       <span class="eyebrow" style="grid-column:1/-1">Covered</span>
-      <span class="big ${x.pct >= 1 ? "pos" : ""}" style="grid-column:1/-1">${pct}%</span>
+      <span class="big ${x.pct >= 1 ? "pos" : ""}" style="grid-column:1/-1">${cov}%</span>
       <div class="meter ${x.pct >= 1 ? "full" : ""}" style="grid-column:1/-1" role="img"
-        aria-label="${pct} percent covered"><i style="width:${Math.min(100, x.pct * 100)}%"></i></div>
+        aria-label="${cov} percent covered"><i style="width:${Math.min(100, x.pct * 100)}%"></i></div>
       <span>529 at graduation</span><span class="num">${fmt(x.bal)}</span>
       <span>${col.years}-year cost, ${esc(d.timelines[k].college_years)}</span><span class="num">${fmt(x.cost)}</span>
       <span><b>${x.gap >= 0 ? "Surplus" : "Shortfall"}</b></span><span class="num ${x.gap >= 0 ? "pos" : "neg"}"><b>${x.gap >= 0 ? "+" : ""}${fmt(x.gap)}</b></span>
@@ -1737,7 +2062,7 @@
       changed();
     });
     const grads = d.children.map((c, k) => `${c.name} finishes high school in ${d.timelines[k].graduation}`);
-    $("f-built").textContent = `${grads.length ? `${grads.join("; ")}. Each 529 contribution stops at that graduation. ` : ""}Savings marked to stop at retirement, investment contributions, and credits and one-time costs not marked "in retirement" stop at retirement. Income before retirement is today's take-home, kept up with inflation plus any yearly raise set in Retirement assumptions.`;
+    $("f-built").textContent = `${grads.length ? `${grads.join("; ")}. Each 529 contribution stops at that graduation. ` : ""}Savings marked to stop at retirement, investment contributions, and credits and costs not marked "in retirement" stop at retirement. Contributions set as "% left" follow each year's left-over. Income before retirement is today's take-home, kept up with inflation plus any yearly raise set in Retirement assumptions.`;
     onChange(drawFuture);
     fillFuture();
     drawFuture();
@@ -1806,7 +2131,7 @@
       const left = r.inc - r.out - r.sav;
       const k = deflator(d, S, r.y);
       const ages = d.partners.map((p) => `${p.name} ${Math.floor(p.age + r.y - d.todayYear)}`).join(", ");
-      const tip = `<b>${r.y}</b> \xB7 ${esc(ages)}<br>${r.s.kids} of ${d.children.length} children at home${r.s.ret ? " \xB7 retired" : ""}<br>Living ${fmt(r.s.living * k)}` + (r.s.tax ? `<br>Taxes set aside ${fmt(r.s.tax * k)}` : "") + (r.s.health ? `<br>Health insurance ${fmt(r.s.health * k)}` : "") + (r.sav ? `<br>Savings ${fmt(r.sav)}` : "") + `<br>Income ${fmt(r.inc)}<br><b>${left >= 0 ? "Left over" : "Short"} ${fmt(Math.abs(left))}/mo</b>`;
+      const tip = `<b>${r.y}</b> \xB7 ${esc(ages)}<br>${r.s.kids} of ${d.children.length} children at home${r.s.ret ? " \xB7 retired" : ""}<br>Living ${fmt(r.s.living * k)}` + (r.s.tax ? `<br>Taxes set aside ${fmt(r.s.tax * k)}` : "") + (r.s.health ? `<br>Health insurance ${fmt(r.s.health * k)}` : "") + (r.s.emergency ? `<br>Emergency costs ${fmt(r.s.emergency * k)} (from the fund)` : "") + (r.s.short ? `<br>Emergency costs the fund can't cover ${fmt(r.s.short * k)}` : "") + (r.sav ? `<br>Savings ${fmt(r.sav)}` : "") + `<br>Income ${fmt(r.inc)}<br><b>${left >= 0 ? "Left over" : "Short"} ${fmt(Math.abs(left))}/mo</b>`;
       g += `<g class="m" data-tip="${tip.replace(/"/g, "&quot;")}"><rect x="${bx}" y="${T + ph - h1}" width="${w}" height="${Math.max(h1, 0)}" rx="2" class="sel"/>` + (h2 > 0.5 ? `<rect x="${bx}" y="${T + ph - h1 - h2}" width="${w}" height="${Math.max(h2 - 2, 0.5)}" rx="2" style="fill:var(--save)"/>` : "") + `<rect class="hit" x="${L + i * bw}" y="${T}" width="${bw}" height="${ph}"/>` + (r.y % 5 === 0 || i === 0 ? `<text x="${L + i * bw + bw / 2}" y="${H - 10}" text-anchor="middle">${r.y}</text>` : "") + "</g>";
       const x0 = L + i * bw;
       path += `${i ? "L" : "M"}${x0},${y(r.inc)}L${x0 + bw},${y(r.inc)}`;
@@ -1836,6 +2161,33 @@
       const df = inc - out;
       return `<tr><td>${esc(lbl)}</td><td>${yr}</td><td>${d.partners.map((p) => Math.floor(p.age + yr - d.todayYear)).join(" / ")}</td><td>${fmt(s.living * k)}</td><td>${fmt(s.tax * k)}</td><td>${fmt(s.health * k)}</td><td>${fmt(s.savings * k)}</td><td>${fmt(out)}</td><td>${fmt(inc)}</td><td class="${df >= 0 ? "pos" : "neg"}">${df >= 0 ? "+" : ""}${fmt(df)}</td></tr>`;
     }).join("");
+    drawBalances(stages);
+  }
+  function drawBalances(stages) {
+    const { d, S } = app;
+    const sim = simulate(d, S);
+    const names = [
+      ...d.children.map((c) => [`529:${c.id}`, `529, ${c.name}`]),
+      ...d.p.savings.map((s) => [`sav:${s.id}`, s.name]),
+      ...d.p.investments.map((v) => [`inv:${v.id}`, v.name])
+    ];
+    $("f-bal-panel").hidden = !names.length;
+    if (!names.length) return;
+    const real = (y) => S.fs.nominal ? 1 : Math.pow(1 + S.rs.inf / 100, y - d.todayYear);
+    const balAt = (key, y) => (sim.years.get(y - 1)?.bal[key] ?? 0) / real(y);
+    const start2 = {};
+    d.children.forEach((c) => start2[`529:${c.id}`] = c.college_529.balance);
+    d.p.savings.forEach((s) => start2[`sav:${s.id}`] = s.balance);
+    d.p.investments.forEach((v) => start2[`inv:${v.id}`] = S.rs.inv[v.id]?.bal ?? v.balance);
+    const capped = d.p.savings.filter((s) => s.max_balance != null);
+    $("f-bal").innerHTML = `<tr><th>Account</th>${stages.map(([yr, lbl]) => `<th>${esc(lbl)} ${yr}</th>`).join("")}${capped.length ? "<th>Reaches max</th>" : ""}</tr>` + names.map(([key, name]) => {
+      const sv = capped.find((s) => `sav:${s.id}` === key);
+      const full = sv ? sim.full[key] : void 0;
+      const kid = d.children.findIndex((c) => `529:${c.id}` === key);
+      const spent = (yr) => kid >= 0 && yr > Math.floor(d.gradT(kid)) + 1;
+      return `<tr><td>${esc(name)}</td>${stages.map(([yr]) => `<td>${spent(yr) ? "\u2013" : fmt(yr <= d.todayYear ? start2[key] : balAt(key, yr))}</td>`).join("")}${capped.length ? `<td>${sv ? full == null ? "not at this rate" : `${full} (${fmt(sv.max_balance)})` : ""}</td>` : ""}</tr>`;
+    }).join("");
+    $("f-bal-note").textContent = `Balance at the start of each stage${S.fs.nominal ? "" : ", in today's dollars"}. 529s show until college starts; savings past their max go to their overflow investment; emergency costs come out of emergency funds first.`;
   }
 
   // src/ui/help.ts
@@ -1874,12 +2226,14 @@
 <table class="help-table">
   <tr><td>Household</td><td>Partners (age, take-home pay, raises, Social Security, pensions,
     retirement accounts) and children (age, 529).</td></tr>
-  <tr><td>Savings &amp; income</td><td>Other income, monthly savings and investment accounts.</td></tr>
+  <tr><td>Savings &amp; income</td><td>Other income, savings accounts and emergency funds (with an
+    optional max balance), and stock and bond accounts.</td></tr>
   <tr><td>Assumptions</td><td>Titles, how many months to average, retirement and college
     assumptions and presets.</td></tr>
   <tr><td>Data sources</td><td>One per kind of CSV export. Pick the file, click <i>Read columns</i>,
     check the date, description and amount columns, then <i>Preview</i>.</td></tr>
-  <tr><td>Categories</td><td>Names, kinds (regular, one-time, credit, ignore), planner groups and
+  <tr><td>Categories</td><td>Names, kinds (regular, annual expense, 1-time purchase, emergency fund
+    cost, credit, ignore), planner groups and
     how each changes when the kids leave or you retire.</td></tr>
   <tr><td>Categorize</td><td>Every transaction, sortable and filterable, plus the rule list.</td></tr>
 </table>
@@ -1912,8 +2266,14 @@
   <li><b>Categories</b> start at their average, with the lowest and highest months beside them.</li>
   <li><b>Credits</b> (reimbursements, refunds) can sit under the category they offset, or below
     the total. Tick them to subtract them.</li>
-  <li><b>Yearly and one-time costs</b> (taxes, big purchases) are kept out of the averages. Tick
-    one to set money aside for it.</li>
+  <li><b>Savings</b>: each 529, savings account, emergency fund and investment adds either a
+    fixed <b>$/mo</b> or <b>% left</b>: a share of what is left each month after spending, taxes
+    and the fixed amounts, kept between an optional min and max. A savings account with a max
+    balance sends the rest to an investment once it's full; the note under it says when.</li>
+  <li><b>Annual expenses</b> (taxes, insurance), <b>1-time purchases</b> and <b>emergency fund
+    costs</b> are kept out of the averages. Tick one to count it. Emergency fund costs are paid
+    from the emergency fund instead of the monthly budget; only what the fund can't cover comes
+    out of the month.</li>
   <li><i>Try 10% less on flexible spending</i> trims the categories marked flexible.</li>
 </ul>
 
@@ -1978,8 +2338,8 @@
   <dt>Where are my changes kept?</dt><dd>In <span class="mono">.financial_planner/state.json</span>
     inside the plan folder. Settings are in the YAML files.</dd>
   <dt>I changed the YAML by hand. Do I need to restart?</dt><dd>No, just reload the page.</dd>
-  <dt>Why are some months huge?</dt><dd>One-time costs are shown in gray and kept out of the
-    regular averages.</dd>
+  <dt>Why are some months huge?</dt><dd>Annual, 1-time and emergency costs are shown in gray and
+    kept out of the regular averages.</dd>
 </dl>`;
   function buildHelp() {
     const root = document.getElementById("help");
@@ -2209,12 +2569,13 @@
     });
     d.p.investments.forEach((v) => {
       const st = rs.inv[v.id];
-      const monthly = S.st.sav[`inv:${v.id}`] ?? 0;
-      const on = st.bal > 0 || monthly > 0;
+      const monthly = budget(d, S.st).amt[`inv:${v.id}`] ?? 0;
+      const fed = d.p.savings.filter((sv) => overflowTarget(d, sv) === v.id).map((sv) => sv.name);
+      const on = st.bal > 0 || monthly > 0 || fed.length > 0;
       $(`pn-inv-${v.id}`).classList.toggle("pane-off", !on);
       $(`r-ic-${v.id}`).textContent = fmt(monthly);
       $(`r-ir-${v.id}`).textContent = `${st.ret}%`;
-      $(`r-inote-${v.id}`).textContent = !on ? "Off until you enter a balance here or a monthly amount in the planner." : `Its own return rate, separate from the presets.${st.ret < rs.inf ? ` At ${st.ret}% it grows slower than ${rs.inf}% inflation, so it loses buying power.` : ""} Turned into monthly income at the withdrawal rate.`;
+      $(`r-inote-${v.id}`).textContent = !on ? "Off until you enter a balance here or a monthly amount in the planner." : `Its own return rate, separate from the presets.${fed.length ? ` Also gets what ${fed.join(" and ")} adds once full.` : ""}${st.ret < rs.inf ? ` At ${st.ret}% it grows slower than ${rs.inf}% inflation, so it loses buying power.` : ""} Turned into monthly income at the withdrawal rate.`;
     });
     const R = retirementIncome(d, S, rs.age);
     const ry = retireYear(d, rs);
@@ -2710,12 +3071,12 @@
     });
     $("sh-file").addEventListener("click", () => {
       const x = sendable();
-      const slug = x.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "scenario";
-      download(`scenario-${slug}.json`, JSON.stringify({
+      const slug2 = x.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "scenario";
+      download(`scenario-${slug2}.json`, JSON.stringify({
         app: "financial-planner",
         s: [compact(app.d, x)]
       }, null, 2));
-      msg.textContent = `Saved scenario-${slug}.json. Attach it to a message or email.`;
+      msg.textContent = `Saved scenario-${slug2}.json. Attach it to a message or email.`;
     });
     $("sh-all").addEventListener("click", () => {
       download("financial-planner-scenarios.json", JSON.stringify({
@@ -2760,9 +3121,15 @@
   ];
   var KINDS2 = [
     ["spending", "Regular"],
-    ["one_time", "One-time"],
+    ["annual", "Annual expense"],
+    ["one_time", "1-time purchase"],
+    ["emergency", "Emergency fund cost"],
     ["credit", "Credit (money in)"],
     ["ignore", "Ignore"]
+  ];
+  var MODES = [
+    ["fixed", "Fixed $ per month"],
+    ["pct", "% of what is left each month"]
   ];
   var CLAIM_AGES = [62, 63, 64, 65, 66, 67, 68, 69, 70];
   function settingsDirty() {
@@ -2894,6 +3261,7 @@
       id="fd-save">Save</button></div></div>`;
     const body = dlg.querySelector("#fd-body");
     wireLists(body, templates);
+    wireModes(body);
     dlg.querySelectorAll("[data-x]").forEach((b) => b.addEventListener("click", () => dlg.close()));
     dlg.querySelector("#fd-save").addEventListener("click", async () => {
       try {
@@ -2934,9 +3302,9 @@
     </div>
     <div class="panel" style="display:grid;gap:10px">
       <div class="sec-head"><h3>Children</h3><span class="small muted">Each child gets a 529 card.</span></div>
-      <div class="cards">${children.map((c, i) => `<div class="card"><div class="card-head"><b>${esc(c.name)}</b><span class="small muted">age ${esc(c.age)}</span></div>
+      <div class="cards">${children.map((c, i) => `<div class="card"><div class="card-head"><b>${esc(c.name ?? `Child ${i + 1}`)}</b><span class="small muted">age ${esc(c.age)}</span></div>
         <div class="row"><span>529 balance</span><span class="num">${money(c.college_529?.balance)}</span></div>
-        <div class="row"><span>529 per month</span><span class="num">${money(c.college_529?.monthly)}</span></div>
+        <div class="row"><span>529 per month</span><span class="num">${contribText(c.college_529 ?? {})}</span></div>
         <div class="card-actions"><button class="btn sm" type="button" data-edit-c="${i}">Edit</button><button
           class="btn sm danger" type="button" data-rm-c="${i}">Remove</button></div></div>`).join("")}
         <button class="card btn add" type="button" id="add-child" style="place-content:center;min-height:120px">+ Add child</button></div>
@@ -3064,7 +3432,14 @@
     const col = c.college_529 ?? {};
     const schools = schoolOptions();
     const html = `<div class="fgrid">
-      ${input("name", "Name", c.name, "text", "A generic name is safest, e.g. Child 1")}
+      ${input(
+      "name",
+      "Name",
+      c.name,
+      "text",
+      'Empty: "Child 1", "Child 2"\u2026 by position',
+      "data-optional"
+    )}
       ${input("age", "Age", c.age, "number")}
       ${input(
       "hs_graduation",
@@ -3075,20 +3450,27 @@
       'data-optional placeholder="2034-06"'
     )}
       ${input("college_529.balance", "529 balance today", col.balance ?? 0, "number")}
-      ${input("college_529.monthly", "529 contribution per month", col.monthly ?? 0, "number")}
+      ${contribFields(col, "college_529.", "529 contribution")}
       ${select("school", "Planned school", schools, c.school ?? schools[0]?.[0])}
       ${input("note", "Note for the card", c.note ?? "", "text", "", "data-optional")}
     </div>`;
-    formDialog(i === null ? "Add child" : `Edit ${c.name}`, html, async (form) => {
-      const next = { ...i === null ? {} : children[i], ...readFields(form) };
-      if (!next.hs_graduation) delete next.hs_graduation;
-      if (!next.note) delete next.note;
-      const list = children.slice();
-      if (i === null) list.push(next);
-      else list[i] = next;
-      children.splice(0, children.length, ...list);
-      await saveHH();
-    });
+    formDialog(
+      i === null ? "Add child" : `Edit ${c.name ?? `Child ${i + 1}`}`,
+      html,
+      async (form) => {
+        const fields = readFields(form);
+        fields.college_529 = contribOut(fields.college_529 ?? {});
+        const next = { ...i === null ? {} : children[i], ...fields };
+        if (!next.name) delete next.name;
+        if (!next.hs_graduation) delete next.hs_graduation;
+        if (!next.note) delete next.note;
+        const list = children.slice();
+        if (i === null) list.push(next);
+        else list[i] = next;
+        children.splice(0, children.length, ...list);
+        await saveHH();
+      }
+    );
   }
   function schoolOptions() {
     const schools = cfg.raw.assumptions?.college?.schools;
@@ -3102,8 +3484,26 @@
   function renderMoney(el) {
     const savings = section("savings", []);
     const investments = section("investments", []);
-    const savRow = (r = {}) => input("name", "Name", r.name ?? "Savings") + input("monthly", "Per month", r.monthly ?? 0, "number") + check("stops_at_retirement", "Stops at retirement", r.stops_at_retirement ?? true);
-    const invRow = (r = {}) => input("name", "Name", r.name ?? "Brokerage") + input("balance", "Balance today", r.balance ?? 0, "number") + input("return_pct", "Yearly return (%)", r.return_pct ?? 0, "number") + input("monthly", "Added per month", r.monthly ?? 0, "number");
+    const overflow = [
+      ["", "The first investment"],
+      ...investments.map((v) => [
+        String(v.id ?? slug(String(v.name ?? ""))),
+        String(v.name ?? "Investments")
+      ])
+    ];
+    const savRow2 = (r = {}) => input("name", "Name", r.name ?? "Savings account") + select(
+      "type",
+      "Type",
+      [["savings", "Savings account"], ["emergency", "Emergency fund"]],
+      r.type ?? "savings"
+    ) + input("balance", "Balance today", r.balance ?? 0, "number") + input(
+      "max_balance",
+      "Max balance",
+      r.max_balance ?? "",
+      "number",
+      "Optional: once reached, the rest goes to an investment"
+    ) + select("overflow_to", "Then invest in", overflow, r.overflow_to ?? "") + input("return_pct", "Yearly interest (%)", r.return_pct ?? 0, "number") + contribFields(r) + check("stops_at_retirement", "Stops at retirement", r.stops_at_retirement ?? true);
+    const invRow = (r = {}) => input("name", "Name", r.name ?? "Stocks") + select("type", "Type", [["stocks", "Stocks"], ["bonds", "Bonds"]], r.type ?? "stocks") + input("balance", "Balance today", r.balance ?? 0, "number") + input("return_pct", "Yearly return (%)", r.return_pct ?? 0, "number") + contribFields(r);
     el.innerHTML = `<div class="panel form">
       <h3>Other income</h3>
       <div class="fgrid">${input(
@@ -3112,27 +3512,75 @@
       cfg.raw.other_income_monthly ?? 0,
       "number"
     )}</div>
-      <h3>Savings</h3><p class="small muted">Money moved to savings every month. It shows in the
-        planner's Savings box.</p>
-      ${listEditor("savings", savings, savRow, "+ Add savings")}
-      <h3>Investments</h3><p class="small muted">Brokerage or stock accounts. Each grows at its own
-        return (0% = off) and becomes retirement income.</p>
+      <h3>Savings</h3><p class="small muted">Savings accounts and emergency funds. Emergency fund
+        costs (a category kind) are paid from the emergency funds. With a max balance, anything
+        past it goes to an investment. Each one adds a fixed amount per month or a share of what
+        is left over each month (after spending, taxes and the fixed amounts), optionally kept
+        between a minimum and a maximum.</p>
+      ${listEditor("savings", savings, savRow2, "+ Add savings account or emergency fund")}
+      <h3>Investments</h3><p class="small muted">Stock and bond accounts. Each grows at its own
+        return (0% = off) and becomes retirement income. Contributions stop at retirement.</p>
       ${listEditor("investments", investments, invRow, "+ Add investment account")}
       <div class="btns"><button class="btn primary" type="button" id="m-save">Save</button></div>
       <p class="msg" id="m-msg"></p></div>`;
-    wireLists(el, { savings: () => savRow(), investments: () => invRow() });
+    wireLists(el, { savings: () => savRow2(), investments: () => invRow() });
+    wireModes(el);
     el.querySelector("#m-save").addEventListener("click", async () => {
       const msg = el.querySelector("#m-msg");
       try {
         const other = el.querySelector('[data-k="other"]').value;
         await save("other_income_monthly", +other || 0);
-        await save("savings", mergeIds(savings, readRows(el, "savings")));
-        await save("investments", mergeIds(investments, readRows(el, "investments")));
+        await save("investments", mergeIds(investments, readRows(el, "investments").map(contribOut)));
+        await save("savings", mergeIds(savings, readRows(el, "savings").map((r) => {
+          const out = contribOut(r);
+          if (!out.overflow_to || out.max_balance === void 0) delete out.overflow_to;
+          return out;
+        })));
         report(msg);
       } catch (err) {
         report(msg, err);
       }
     });
+  }
+  function contribFields(r, prefix = "", label2 = "Contribution") {
+    const pct = r.left_pct != null;
+    return select(`${prefix}_mode`, label2, MODES, pct ? "pct" : "fixed") + `<span class="contents" data-when="fixed"${pct ? " hidden" : ""}>${input(`${prefix}monthly`, "Per month", r.monthly ?? 0, "number")}</span><span class="contents" data-when="pct"${pct ? "" : " hidden"}>${input(`${prefix}left_pct`, "% of left-over", r.left_pct ?? "", "number")}${input(
+      `${prefix}min_monthly`,
+      "At least per month",
+      r.min_monthly ?? "",
+      "number",
+      "Optional"
+    )}${input(
+      `${prefix}max_monthly`,
+      "At most per month",
+      r.max_monthly ?? "",
+      "number",
+      "Optional"
+    )}</span>`;
+  }
+  function wireModes(root) {
+    root.addEventListener("change", (e) => {
+      const sel = e.target;
+      if (!(sel instanceof HTMLSelectElement) || !sel.dataset.k?.endsWith("_mode")) return;
+      sel.closest("label").parentElement.querySelectorAll(":scope > [data-when]").forEach((x) => x.hidden = x.dataset.when !== sel.value);
+    });
+  }
+  function contribOut(f) {
+    const { _mode: mode2, ...out } = f;
+    if (mode2 === "pct") {
+      out.left_pct = out.left_pct ?? 0;
+    } else {
+      delete out.left_pct;
+      delete out.min_monthly;
+      delete out.max_monthly;
+    }
+    return out;
+  }
+  function contribText(c) {
+    return c.left_pct != null ? `${c.left_pct}% of left-over` : fmt(+c.monthly || 0);
+  }
+  function slug(text) {
+    return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "item";
   }
   function mergeIds(before, after) {
     return after.map((r, i) => before[i]?.id && before[i].name === r.name ? { id: before[i].id, ...r } : r);
@@ -3536,11 +3984,14 @@
       <button class="btn sm danger" type="button" data-del>Remove</button></td></tr>`;
     el.innerHTML = `<div class="panel" style="display:grid;gap:10px">
       <div class="sec-head"><h3>Categories</h3><span class="small muted">Saved in ${esc(fileOf("categories"))}. Renaming a category also updates the rules that use it.</span></div>
-      <p class="small muted"><b>Kind:</b> regular spending is averaged in the planner; one-time
-        costs get an on/off toggle; credits (money in) can be subtracted; ignore is for transfers,
-        card payments and paychecks. <b>Kids gone / retired</b> are % changes used by Spending over
-        time. <b>On by default</b>, <b>in retirement</b> and <b>tax</b> apply to one-time costs and
-        credits. <b>Offsets</b>: for a credit, the category it reduces.</p>
+      <p class="small muted"><b>Kind:</b> regular spending is averaged in the planner. Annual
+        expenses (taxes, insurance), 1-time purchases and emergency fund costs each get an on/off
+        toggle in their own planner box; emergency fund costs are paid from the emergency fund.
+        Credits (money in) can be subtracted; ignore is for transfers, card payments and
+        paychecks. <b>Kids gone / retired</b> are % changes used by Spending over time. <b>On by
+        default</b> and <b>in retirement</b> apply to those costs and to credits; <b>tax</b> puts
+        an annual expense or purchase in the tax set-aside. <b>Offsets</b>: for a credit, the
+        category it reduces.</p>
       <div class="ptable-scroll"><table class="dtable edit" id="cat-table"><thead><tr>
         <th>Name</th><th>Kind</th><th>Group</th><th>Flexible</th><th>Kids gone %</th><th>Retired %</th>
         <th>On by default</th><th>In retirement</th><th>Tax</th><th>Offsets</th><th>Toggle label</th>
