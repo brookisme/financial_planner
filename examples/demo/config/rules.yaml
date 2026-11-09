@@ -13,10 +13,11 @@ rules:
   - {category: Benefit reimbursements, contains: BENEFITS REIMBURSEMENT}
   - {category: Federal tax refund, contains: IRS TREAS}
 
-  # one-time
+  # annual, 1-time and emergency costs
   - {category: Property tax, contains: COUNTY TAX COLLECTOR}
   - {category: Income tax, contains: STATE TAX BOARD}
   - {category: Furniture, contains: FURNITURE, min_amount: 500}
+  - {category: Car repairs, contains: QUICKFIX AUTO}
 
   # spending
   - {category: Housing, contains: MORTGAGE}
