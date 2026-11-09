@@ -7,7 +7,7 @@
 
 import {$, $in, app, changed, hideTip, num, onChange, showTip} from '../app';
 import {esc, fk, fmt, niceStep, sum} from '../format';
-import {clone, type IncomePart, retirementIncome, retireYear, spendAt, spendToday,
+import {ageWhen, clone, type IncomePart, retirementIncome, retireYear, spendAt, spendToday,
         ssFactor} from '../model';
 
 //
@@ -31,7 +31,8 @@ export function buildRetire(): void {
   $('ra-who').textContent = `${p.name} retires at`;
   $('retire-sub').textContent = `Monthly income at each retirement age, in today's dollars. ${
       d.partners.map((x) => `${x.name} is ${x.age}`).join(', ')}.${d.partners.length > 1 ?
-      ' Everyone retires in the same year.' : ''}`;
+      ` The chart and table follow ${p.name}'s age.` : ''}`;
+  buildOthers();
   buildPanels();
   buildAssumptions();
   ra.addEventListener('input', () => {
@@ -55,6 +56,7 @@ export function fillRetire(): void {
   $in('r-ret').value = String(rs.ret);
   $in('r-inf').value = String(rs.inf);
   $in('r-wd').value = String(rs.wd);
+  drawOthers();
   document.querySelectorAll<HTMLInputElement>('[data-r]').forEach((el) => {
     const v = getR(el.dataset.r!);
     if (el.type === 'checkbox') el.checked = !!v;
@@ -71,6 +73,53 @@ export function fillRetire(): void {
 //
 let lo = 55;
 let hi = 70;
+
+/** Retirement-age controls for partners after the first. */
+function buildOthers(): void {
+  const d = app.d;
+  const box = $('ra-others');
+  const others = d.partners.slice(1);
+  box.hidden = !others.length;
+  box.innerHTML = others.map((p) => {
+    const min = Math.max(50, Math.ceil(p.age));
+    return `<div class="ctl"><div class="agehead"><span class="eyebrow">${esc(p.name)} retires at</span><span
+      class="big num" id="rao-v-${esc(p.id)}"></span><span class="muted" id="rao-when-${
+      esc(p.id)}"></span></div><label class="small"><input type="checkbox" data-same="${esc(p.id)}">
+      same year as ${esc(d.primary.name)}</label><input type="range" data-rao="${esc(p.id)}" min="${
+      min}" max="${Math.max(min + 5, 75)}" step="1" aria-label="${esc(p.name)} retirement age"></div>`;
+  }).join('');
+  box.querySelectorAll<HTMLInputElement>('[data-rao]').forEach((el) => {
+    el.addEventListener('input', () => {
+      app.S.rs.ages[el.dataset.rao!] = +el.value;
+      changed();
+    });
+  });
+  box.querySelectorAll<HTMLInputElement>('[data-same]').forEach((el) => {
+    el.addEventListener('change', () => {
+      const id = el.dataset.same!;
+      const p = d.partners.find((x) => x.id === id)!;
+      app.S.rs.ages[id] = el.checked ? null : Math.round(ageWhen(d, p, app.S.rs.age));
+      changed();
+    });
+  });
+}
+
+/** Shows each other partner's retirement age and year. */
+function drawOthers(): void {
+  const {d, S} = app;
+  const R = retirementIncome(d, S, S.rs.age);
+  d.partners.slice(1).forEach((p) => {
+    const own = S.rs.ages[p.id];
+    const age = R.ages[p.id];
+    const yr = R.years[p.id] - 1;
+    $(`rao-v-${p.id}`).textContent = String(Math.floor(age));
+    $(`rao-when-${p.id}`).textContent = `${yr} · ${Math.max(0, yr - Math.floor(d.todayYear))} years from now`;
+    const same = document.querySelector<HTMLInputElement>(`[data-same="${CSS.escape(p.id)}"]`)!;
+    same.checked = own == null;
+    document.querySelector<HTMLInputElement>(`[data-rao="${CSS.escape(p.id)}"]`)!.value =
+        String(Math.round(age));
+  });
+}
 
 /** Color for an income part. */
 function partColor(x: IncomePart): string {
@@ -213,6 +262,7 @@ function drawRetire(): void {
   const {d, S} = app;
   const rs = S.rs;
   $in('ra').value = String(rs.age);
+  drawOthers();
   document.querySelectorAll<HTMLElement>('[data-pane]').forEach((el) => {
     el.classList.toggle('pane-off', !getR(el.dataset.pane!));
   });
@@ -246,15 +296,18 @@ function drawRetire(): void {
   const R = retirementIncome(d, S, rs.age);
   const ry = retireYear(d, rs);
   const sp = spendAt(d, S, ry).spend;
+  const staggered = d.partners.some((p) => R.years[p.id] !== ry);
   const net = 1 - S.fs.tax / 100;
   const today = spendToday(d, S.st);
   $('ra-v').textContent = String(rs.age);
-  $('ra-when').textContent = `${ry - 1} · ${Math.round(R.yrs)} years from now`;
+  $('ra-when').textContent = `${R.years[d.primary.id] - 1} · ${
+      Math.round(rs.age - d.primary.age)} years from now`;
   const who = (id: string) => d.partners.find((p) => p.id === id)?.name ?? '';
   const row = (x: IncomePart) => {
     let sub = '';
     if (x.balance != null) {
-      sub = `${fmt(x.balance)} balance · ${fmt(x.balance / Math.pow(1 + rs.inf / 100, R.yrs))} in today's $`;
+      sub = `${fmt(x.balance)} balance · ${
+          fmt(x.balance / Math.pow(1 + rs.inf / 100, x.yrs ?? R.yrs))} in today's $`;
     }
     if (x.kind === 'pension') sub = who(x.partner);
     if (x.kind === 'ss') {
@@ -274,7 +327,8 @@ function drawRetire(): void {
       ok ? 'pos' : 'neg'}"><b>${ok ? '+' : ''}${fmt(v - sp)}</b></span>`;
   };
   $('r-parts').innerHTML = R.parts.map(row).join('') +
-      `<span></span><span class="tot">Income at retirement, before tax</span><span class="num tot">${
+      `<span></span><span class="tot">Income ${staggered ? `once everyone is retired (${ry - 1})` :
+        'at retirement'}, before tax</span><span class="num tot">${
         fmt(R.total)}/mo</span>` +
       `<span></span><span class="muted">Income tax (${S.fs.tax}%)</span><span class="num muted">(${
         fmt(R.total * S.fs.tax / 100)})</span>` +
@@ -319,7 +373,7 @@ function drawChart(today: number): void {
   const ph = H - T - B;
   const bw = pw / ages.length;
   const base0 = Math.round(d.todayYear - d.primary.age);
-  const spA = ages.map((x) => spendAt(d, S, base0 + 1 + x.age).spend);
+  const spA = ages.map((x) => spendAt(d, S, x.year).spend);
   const max = Math.max(today, ...spA, ...ages.map((x) => x.full * net), 1);
   const step = niceStep(max);
   const top = Math.ceil(max / step) * step;
@@ -393,7 +447,7 @@ function drawTable(): void {
       kinds.map((k) => `<th>${names[k]}</th>`).join('')}<th>After tax</th><th>Once SS starts</th><th>Projected spending</th><th>vs spending, long run</th></tr>` +
       ages.map((a) => {
         const x = retirementIncome(d, S, a);
-        const sa = spendAt(d, S, base0 + 1 + a).spend;
+        const sa = spendAt(d, S, x.year).spend;
         const df = x.full * net - sa;
         return `<tr data-a="${a}" class="${a === S.rs.age ? 'on' : ''}">${d.partners.map((p) =>
             `<td>${Math.floor(x.ages[p.id])}</td>`).join('')}<td>${base0 + a}</td>${kinds.map((k) =>
