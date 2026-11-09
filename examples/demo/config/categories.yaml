@@ -27,16 +27,14 @@ categories:
   - {name: Cash & checks, group: Unsorted, kids_gone_pct: -30}
   - {name: Other, group: Unsorted, kids_gone_pct: -20}
 
-  # Annual expenses, 1-time purchases and emergency fund costs: toggles in the planner
+  # Annual expenses, 1-time purchases and emergency fund costs: kept out of the averages
   - name: Income tax
     kind: annual
-    tax: true
     default_on: true
     label: Set aside for income tax
     note: state payment
   - name: Property tax
     kind: annual
-    tax: true
     in_retirement: true
     label: Set aside for property tax
   - name: Furniture
