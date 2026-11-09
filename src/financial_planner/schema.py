@@ -423,7 +423,8 @@ class Category(_Model):
         retired_pct: Change after retiring (applied on top of kids_gone_pct).
         default_on: For costs / credits: counted by default.
         in_retirement: For costs / credits: continues after retiring.
-        tax: For annual / one_time: belongs in the "Tax set-aside" total.
+        tax: Unused (the budget's annual expenses list replaced the tax set-aside); still
+            accepted so older plans load.
         offsets: For credit: a spending category it's shown under (a reimbursement) or a cost
             category it reduces (e.g. a federal refund under income tax).
         label: Text for the planner toggle.
