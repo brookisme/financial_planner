@@ -11,13 +11,14 @@ License: BSD 3-Clause
 #
 # Imports
 #
+import hashlib
 import re
 from pathlib import Path
 from urllib.parse import quote
 from typing import Any, Awaitable, Callable
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
@@ -38,6 +39,7 @@ WRITE_HEADER: str = 'x-financial-planner'
 LOCAL_HOSTS: tuple[str, ...] = ('127.0.0.1', 'localhost', 'testserver')
 SAFE_NAME_RE: re.Pattern[str] = re.compile(r'[^A-Za-z0-9._ -]')
 PREVIEW_ROWS: int = 12
+VERSIONED_FILES: tuple[str, ...] = ('app.js', 'app.css')
 
 
 #
@@ -59,13 +61,18 @@ def create_app(plan_dir: Path) -> FastAPI:
     @app.middleware('http')
     async def guard(request: Request,
                     call_next: Callable[[Request], Awaitable[Response]]) -> Response:
-        """Only answer local hosts; require the app header on writes."""
+        """Only answer local hosts; require the app header on writes. Web files are always
+        revalidated, so a browser never pairs a new page with a cached old script after an update.
+        """
         host = (request.headers.get('host') or '').rsplit(':', 1)[0].strip('[]')
         if host not in LOCAL_HOSTS:
             return JSONResponse({'error': 'not allowed'}, status_code=403)
         if request.method not in ('GET', 'HEAD') and not request.headers.get(WRITE_HEADER):
             return JSONResponse({'error': 'missing app header'}, status_code=403)
-        return await call_next(request)
+        response = await call_next(request)
+        if request.url.path.startswith('/static/'):
+            response.headers['Cache-Control'] = 'no-cache'
+        return response
 
     @app.get('/api/payload')
     def payload() -> dict[str, Any]:
@@ -221,12 +228,13 @@ def create_app(plan_dir: Path) -> FastAPI:
         return {'ok': True}
 
     @app.get('/')
-    def index() -> FileResponse:
-        """The app page."""
+    def index() -> HTMLResponse:
+        """The app page, linking each web file by a fingerprint of its contents."""
         page = WEB_DIR / 'index.html'
         if not page.exists():
             raise HTTPException(500, 'the web app is not built; run "pixi run web-build"')
-        return FileResponse(page, headers={'Cache-Control': 'no-store'})
+        return HTMLResponse(_versioned(page.read_text(encoding='utf-8')),
+                            headers={'Cache-Control': 'no-store'})
 
     if WEB_DIR.is_dir():
         app.mount('/static', StaticFiles(directory=WEB_DIR), name='static')
@@ -236,6 +244,20 @@ def create_app(plan_dir: Path) -> FastAPI:
 #
 # INTERNAL
 #
+def _versioned(html: str) -> str:
+    """Add ``?v=<content hash>`` to the page's script and stylesheet links.
+
+    A changed file gets a new address, so a browser that cached an older copy (even one cached
+    without any Cache-Control header) has to fetch the new one after an update.
+    """
+    for name in VERSIONED_FILES:
+        path = WEB_DIR / name
+        if path.exists():
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+            html = html.replace(f'"/static/{name}"', f'"/static/{name}?v={digest}"')
+    return html
+
+
 def _data_files(plan_dir: Path) -> list[str]:
     """CSV files under data/, relative to the plan folder."""
     data = plan_dir / DATA_DIR
