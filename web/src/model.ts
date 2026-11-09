@@ -10,8 +10,9 @@
  */
 
 import {sum} from './format';
-import type {Category, Child, ChildTimeline, FutureState, Partner, Payload, PlannerState,
-             RetireState, Settings} from './types';
+import type {Category, Child, ChildTimeline, Contribution, CostKind, FutureState, Partner,
+             Payload, PlannerState, RetireState, SavingsAccount, SavLine,
+             Settings} from './types';
 
 //
 // CONSTANTS
@@ -23,6 +24,8 @@ export const SS_FACTORS: Record<number, number> = {
 };
 /** Years of the long-range projection. */
 export const PROJECTION_YEARS = 35;
+/** Category kinds kept out of the averages, each with its own planner panel. */
+export const COST_KINDS: CostKind[] = ['annual', 'one_time', 'emergency'];
 
 //
 // PUBLIC
@@ -34,7 +37,10 @@ export class Data {
   readonly cats: Category[];
   readonly byCat: number[][];
   readonly regular: number[];
+  readonly annual: number[];
   readonly oneTime: number[];
+  readonly emergency: number[];
+  readonly costs: number[];
   readonly credits: number[];
   readonly todayYear: number;
   readonly todayMonth: number;
@@ -50,7 +56,10 @@ export class Data {
     this.index = new Map(this.cats.map((c, i) => [c.name, i]));
     const kind = (k: string) => this.cats.map((_, i) => i).filter((i) => this.cats[i].kind === k);
     this.regular = kind('spending');
+    this.annual = kind('annual');
     this.oneTime = kind('one_time');
+    this.emergency = kind('emergency');
+    this.costs = [...this.annual, ...this.oneTime, ...this.emergency];
     this.credits = kind('credit');
     this.todayYear = +p.plan.today.slice(0, 4);
     this.todayMonth = +p.plan.today.slice(5, 7);
@@ -86,10 +95,22 @@ export class Data {
     return this.credits.filter((i) => this.cats[i].offsets === name);
   }
 
-  /** Whether a credit is shown inside the planner table (not nested under a one-time cost). */
+  /** Whether a credit is shown inside the planner table (not nested under a cost toggle). */
   isPlannerCredit(i: number): boolean {
     const off = this.cats[i].offsets;
-    return !off || this.cats[this.idx(off)]?.kind !== 'one_time';
+    const k = this.cats[this.idx(off ?? '')]?.kind;
+    return !off || !COST_KINDS.includes(k as CostKind);
+  }
+
+  /** Emergency funds (they pay for emergency costs, in config order). */
+  get funds(): SavingsAccount[] {
+    return this.p.savings.filter((s) => s.type === 'emergency');
+  }
+
+  /** Every contribution key: 529s, then savings, then investments. */
+  get savKeys(): string[] {
+    return [...this.children.map((c) => `529:${c.id}`), ...this.p.savings.map((s) => `sav:${s.id}`),
+      ...this.p.investments.map((v) => `inv:${v.id}`)];
   }
 
   /** A child's high-school graduation as a fractional year (June 2034 -> 2034.5). */
@@ -108,10 +129,10 @@ export function defaults(d: Data): Settings {
   const st: PlannerState = {inc: {}, sav: {}, on: {}, plan: {}};
   d.partners.forEach((x) => st.inc[x.id] = x.take_home_monthly);
   st.inc.other = p.other_income_monthly;
-  d.children.forEach((c) => st.sav[`529:${c.id}`] = c.college_529.monthly);
-  p.savings.forEach((s) => st.sav[`sav:${s.id}`] = s.monthly);
-  p.investments.forEach((v) => st.sav[`inv:${v.id}`] = v.monthly);
-  [...d.oneTime, ...d.credits].forEach((i) => st.on[d.cats[i].name] = d.cats[i].default_on);
+  d.children.forEach((c) => st.sav[`529:${c.id}`] = savLine(c.college_529));
+  p.savings.forEach((s) => st.sav[`sav:${s.id}`] = savLine(s));
+  p.investments.forEach((v) => st.sav[`inv:${v.id}`] = savLine(v));
+  [...d.costs, ...d.credits].forEach((i) => st.on[d.cats[i].name] = d.cats[i].default_on);
   d.regular.forEach((i) => st.plan[d.cats[i].name] = d.avg(i));
   d.credits.filter((i) => d.isPlannerCredit(i))
       .forEach((i) => st.plan[d.cats[i].name] = d.credAvg(i));
@@ -157,6 +178,8 @@ export function rebase(defs: Settings, saved: Partial<Settings>|null|undefined,
                        base?: Partial<Settings>|null): Settings {
   const out = clone(defs);
   if (!saved) return out;
+  saved = upgrade(saved);
+  base = base && upgrade(base);
   const baseMap = new Map(flatten(base ?? {}).map(([k, v]) => [k, v]));
   const defMap = new Map(flatten(defs).map(([k, v]) => [k, v]));
   for (const [key, value] of flatten(saved)) {
@@ -237,27 +260,31 @@ export function creditsMo(d: Data, st: PlannerState, ret = false): number {
       .map((i) => st.plan[d.cats[i].name] ?? 0));
 }
 
-/** A one-time category's monthly amount net of any toggled-on credits nested under it. */
+/** A cost category's monthly amount net of any toggled-on credits nested under it. */
 export function oneTimeNet(d: Data, st: PlannerState, i: number): number {
   const off = d.offsetsOf(d.cats[i].name).filter((c) => st.on[d.cats[c].name]);
   return d.avg(i) - sum(off.map((c) => d.credAvg(c)));
 }
 
-/** Monthly set-aside for one-time costs, either the tax ones or the others. */
-function oneTimeMo(d: Data, st: PlannerState, tax: boolean, ret: boolean): number {
-  return sum(d.oneTime.filter((i) => d.cats[i].tax === tax && st.on[d.cats[i].name] &&
-                                     (!ret || d.cats[i].in_retirement))
+/** Monthly amount of toggled-on cost categories (net of nested credits). */
+function costMo(d: Data, st: PlannerState, list: number[], ret: boolean): number {
+  return sum(list.filter((i) => st.on[d.cats[i].name] && (!ret || d.cats[i].in_retirement))
       .map((i) => oneTimeNet(d, st, i)));
 }
 
-/** Tax set-aside per month (tax one-time costs that are on, net of nested credits). */
+/** Tax set-aside per month (annual / one-time costs marked tax, net of nested credits). */
 export function taxMo(d: Data, st: PlannerState, ret = false): number {
-  return oneTimeMo(d, st, true, ret);
+  return costMo(d, st, [...d.annual, ...d.oneTime].filter((i) => d.cats[i].tax), ret);
 }
 
-/** Non-tax one-time costs that are toggled on. */
+/** Non-tax annual expenses and 1-time purchases that are toggled on. */
 export function extraMo(d: Data, st: PlannerState, ret = false): number {
-  return oneTimeMo(d, st, false, ret);
+  return costMo(d, st, [...d.annual, ...d.oneTime].filter((i) => !d.cats[i].tax), ret);
+}
+
+/** Emergency costs per month (paid from the emergency funds when there are any). */
+export function emergencyMo(d: Data, st: PlannerState, ret = false): number {
+  return costMo(d, st, d.emergency, ret);
 }
 
 /** Take-home income per month. */
@@ -265,9 +292,46 @@ export function incomeMo(st: PlannerState): number {
   return sum(Object.values(st.inc));
 }
 
-/** Investment contributions per month (keys inv:...). */
-export function investingMo(st: PlannerState): number {
-  return sum(Object.entries(st.sav).filter(([k]) => k.startsWith('inv:')).map(([, v]) => v));
+/** A planner contribution line from a config entry. */
+export function savLine(c: Contribution): SavLine {
+  return {mode: c.left_pct == null ? 'fixed' : 'pct', amt: c.monthly, pct: c.left_pct ?? 0,
+    min: c.min_monthly, max: c.max_monthly};
+}
+
+/**
+ * Splits what is free each month between contribution lines. Fixed lines come off first; every
+ * percent line then takes its share of what remains (the same base for all of them), kept between
+ * its min and max.
+ * @param lines [key, line] pairs that are contributing this month.
+ * @param free Income minus spending and taxes.
+ * @return Amount per key and what is left over after all of them.
+ */
+export function contributions(lines: Array<[string, SavLine|undefined]>, free: number):
+    {amt: Record<string, number>; left: number} {
+  const amt: Record<string, number> = {};
+  let base = free;
+  lines.forEach(([k, l]) => {
+    if (l && l.mode !== 'pct') {
+      amt[k] = l.amt;
+      base -= l.amt;
+    }
+  });
+  let left = base;
+  lines.forEach(([k, l]) => {
+    if (l?.mode !== 'pct') return;
+    let v = Math.max(0, base) * l.pct / 100;
+    if (l.min != null) v = Math.max(v, l.min);
+    if (l.max != null) v = Math.min(v, l.max);
+    amt[k] = v;
+    left -= v;
+  });
+  return {amt, left};
+}
+
+/** The investment a savings account sends contributions to once it reaches its max. */
+export function overflowTarget(d: Data, sv: SavingsAccount): string|null {
+  if (sv.max_balance == null) return null;
+  return sv.overflow_to ?? d.p.investments[0]?.id ?? null;
 }
 
 /** One month on paper. */
@@ -276,25 +340,40 @@ export interface Budget {
   regular: number;
   credits: number;
   extra: number;
+  emergency: number;
   spend: number;
   savings: number;
   investing: number;
   tax: number;
+  amt: Record<string, number>;
+  overflow: Record<string, string>;
   left: number;
 }
 
-/** The monthly budget for planner settings. */
+/**
+ * The monthly budget for planner settings. Emergency costs are paid from the emergency funds
+ * (so they are not in spending) unless there is no emergency fund. A savings account already at
+ * its max sends its contribution to its overflow investment.
+ */
 export function budget(d: Data, st: PlannerState): Budget {
   const income = incomeMo(st);
   const regular = regularMo(d, st);
   const credits = creditsMo(d, st);
   const extra = extraMo(d, st);
-  const spend = regular - credits + extra;
-  const allSav = sum(Object.values(st.sav));
-  const investing = investingMo(st);
+  const emergency = emergencyMo(d, st);
+  const spend = regular - credits + extra + (d.funds.length ? 0 : emergency);
   const tax = taxMo(d, st);
-  return {income, regular, credits, extra, spend, savings: allSav - investing, investing, tax,
-    left: income - spend - allSav - tax};
+  const {amt, left} = contributions(d.savKeys.map((k) => [k, st.sav[k]]), income - spend - tax);
+  const overflow: Record<string, string> = {};
+  d.p.savings.forEach((sv) => {
+    const to = overflowTarget(d, sv);
+    if (to && sv.balance >= sv.max_balance!) overflow[`sav:${sv.id}`] = to;
+  });
+  const isInv = (k: string) => k.startsWith('inv:') || k in overflow;
+  const investing = sum(Object.entries(amt).filter(([k]) => isInv(k)).map(([, v]) => v));
+  const savings = sum(Object.entries(amt).filter(([k]) => !isInv(k)).map(([, v]) => v));
+  return {income, regular, credits, extra, emergency, spend, savings, investing, tax, amt,
+    overflow, left};
 }
 
 // ---------- college ----------
@@ -329,11 +408,10 @@ export function kidCalc(d: Data, s: Settings, k: number): KidResult {
   const child = d.children[k];
   const tl = d.timelines[k];
   const c = s.cs[child.id];
-  const m = s.st.sav[`529:${child.id}`] ?? 0;
   const r = c.ret / 100;
   const g = c.inf / 100;
   const months = tl.months_to_graduation;
-  const bal = fv(child.college_529.balance, m, months, r);
+  const bal = simulate(d, s).at[`529:${child.id}`];
   let cost = 0;
   for (let j = 0; j < d.p.assumptions.college.years; j++) {
     cost += c.cost * Math.pow(1 + g, tl.years_to_college + j);
@@ -448,73 +526,21 @@ export function retireYear(d: Data, rs: RetireState, a = rs.age): number {
 /**
  * Monthly retirement income (today's dollars, before tax) once everyone has retired, if the
  * primary partner retires at a. Each partner's pensions and accounts follow their own retirement
- * age.
+ * age; investments use their simulated balances (see simulate).
  * @param d The data.
  * @param s Settings.
  * @param a Primary partner's retirement age.
  */
 export function retirementIncome(d: Data, s: Settings, a: number): RetireResult {
-  const rs = s.rs;
-  const year = retireYear(d, rs, a);
-  const yrs = Math.max(a - d.primary.age, ...d.partners.map((p) =>
-      partnerRetireAge(d, rs, p, a) - p.age));
-  const r = rs.ret / 100;
-  const real = (y: number) => Math.pow(1 + rs.inf / 100, y);
-  const wd = rs.wd / 100 / 12;
-  const parts: IncomePart[] = [];
-  const ages: Record<string, number> = {};
-  const years: Record<string, number> = {};
-  d.partners.forEach((p) => {
-    const ageR = partnerRetireAge(d, rs, p, a);
-    const pYrs = ageR - p.age;
-    ages[p.id] = ageR;
-    years[p.id] = partnerRetireYear(d, rs, p, a);
-    p.pensions.forEach((pn, i) => {
-      const key = `${p.id}:${i}`;
-      const st = rs.pen[key];
-      if (!st?.on) return;
-      let v = st.monthly != null ? st.monthly :
-          interpolatePension(st.est, ageR, p.age, pn.service_years_now);
-      if (pn.grows_with_raises) {
-        v *= Math.pow(1 + (rs.raise[p.id] ?? 0) / 100, Math.max(0, ageR - p.age - 1.5));
-      }
-      parts.push({kind: 'pension', key, name: pn.name, partner: p.id, value: v, started: true});
-    });
-    p.accounts.forEach((ac, i) => {
-      const key = `${p.id}:${i}`;
-      const st = rs.acct[key];
-      if (!st?.on) return;
-      const bal = fv(st.bal, st.monthly, Math.round(pYrs * 12), r);
-      parts.push({kind: 'account', key, name: ac.name, partner: p.id, value: bal / real(pYrs) * wd,
-        balance: bal, yrs: pYrs, started: true});
-    });
-  });
-  d.p.investments.forEach((v) => {
-    const st = rs.inv[v.id];
-    if (!st) return;
-    const bal = fv(st.bal, s.st.sav[`inv:${v.id}`] ?? 0, Math.round(yrs * 12), st.ret / 100);
-    if (bal <= 0) return;
-    parts.push({kind: 'investment', key: v.id, name: v.name, partner: '', value: bal / real(yrs) * wd,
-      balance: bal, yrs, started: true});
-  });
-  if (rs.ss) {
-    d.partners.forEach((p) => {
-      const ageR = ages[p.id];
-      const want = rs.claim[p.id];
-      const claimAge = want == null ? Math.max(62, ageR) : Math.min(70, Math.max(want, ageR));
-      const value = (rs.ssAmt[p.id] ?? 0) * ssFactor(claimAge);
-      if (!value) return;
-      const ageThen = ageR + year - years[p.id];
-      parts.push({kind: 'ss', key: p.id, name: `${p.name} Social Security`, partner: p.id, value,
-        started: ageThen >= claimAge - 0.01, claimAge,
-        start: yearAtAge(d, p, Math.ceil(claimAge - 0.01))});
-    });
-  }
+  const base = baseRetirement(d, s, a);
+  const inv = investmentParts(d, s, base.yrs, simulate(d, s, a).at);
+  const parts = [...base.parts.filter((x) => x.kind !== 'ss'), ...inv,
+    ...base.parts.filter((x) => x.kind === 'ss')];
   const total = sum(parts.filter((x) => x.started).map((x) => x.value));
   const pending = parts.filter((x) => !x.started);
   const later = sum(pending.map((x) => x.value));
-  return {age: a, yrs, year, years, parts, total, later, full: total + later,
-    fullYear: Math.max(0, ...pending.map((x) => x.start ?? 0)), ages};
+  return {...base, parts, total, later, full: total + later,
+    fullYear: Math.max(0, ...pending.map((x) => x.start ?? 0))};
 }
 
 /** One year of the long-range projection (monthly amounts, today's dollars). */
@@ -526,6 +552,8 @@ export interface YearSpend {
   living: number;
   tax: number;
   health: number;
+  emergency: number;
+  short: number;
   spend: number;
   savings: number;
 }
@@ -533,38 +561,17 @@ export interface YearSpend {
 /**
  * Monthly spending in a calendar year: categories change as children leave home (partly while
  * some are still home) and again after retiring; credits and contributions stop on schedule.
+ * Emergency costs come out of the emergency funds; only what the funds can't cover (`short`) is
+ * in `spend`. `savings` is what the simulation puts into 529s, savings and investments.
  * @param d The data.
  * @param s Settings.
  * @param y Calendar year.
  */
 export function spendAt(d: Data, s: Settings, y: number): YearSpend {
-  const {st, fs} = s;
-  const t = y + 0.5;
-  const total = d.children.length;
-  const kids = d.children.filter((_, k) => t < d.gradT(k)).length;
-  const gone = total ? (total - kids) / total : 0;
-  const ret = y >= retireYear(d, s.rs);
-  const cats: Record<string, number> = {};
-  let living = 0;
-  d.regular.forEach((i) => {
-    const n = d.cats[i].name;
-    let v = (st.plan[n] ?? 0) * Math.max(0, 1 + gone * (fs.kg[n] ?? 0) / 100);
-    if (ret) v *= Math.max(0, 1 + (fs.rt[n] ?? 0) / 100);
-    cats[n] = v;
-    living += v;
-  });
-  living += extraMo(d, st, ret) - creditsMo(d, st, ret);
-  const tax = taxMo(d, st, ret);
-  const health = ret ? fs.health : 0;
-  let savings = 0;
-  d.children.forEach((c, k) => {
-    if (t < d.gradT(k)) savings += st.sav[`529:${c.id}`] ?? 0;
-  });
-  d.p.savings.forEach((sv) => {
-    if (!(ret && sv.stops_at_retirement)) savings += st.sav[`sav:${sv.id}`] ?? 0;
-  });
-  if (!ret) savings += investingMo(st);
-  return {y, kids, ret, cats, living, tax, health, spend: living + tax + health, savings};
+  const x = spendingAt(d, s, y, retireYear(d, s.rs));
+  const sy = simulate(d, s).years.get(y);
+  const short = sy?.short ?? 0;
+  return {...x, short, spend: x.spend + short, savings: sy?.saved ?? 0};
 }
 
 /**
@@ -573,15 +580,165 @@ export function spendAt(d: Data, s: Settings, y: number): YearSpend {
  * from each claim year. Other income and investments switch over once everyone has retired.
  */
 export function incomeAt(d: Data, s: Settings, y: number): number {
-  const {st, rs, fs} = s;
-  const R = retirementIncome(d, s, rs.age);
-  const n = Math.max(0, y - d.todayYear);
-  const pay = sum(d.partners.filter((p) => y < R.years[p.id]).map((p) =>
-      (st.inc[p.id] ?? 0) * Math.pow(1 + (rs.raise[p.id] ?? 0) / 100, n))) +
-      (y < R.year ? st.inc.other ?? 0 : 0);
-  const paid = sum(R.parts.filter((x) => x.kind === 'investment' ? y >= R.year :
-      y >= R.years[x.partner] && (x.kind !== 'ss' || y >= (x.start ?? 0))).map((x) => x.value));
-  return pay + paid * (1 - fs.tax / 100);
+  return incomeFrom(d, s, retirementIncome(d, s, s.rs.age), y);
+}
+
+// ---------- balances over time ----------
+
+/** One calendar year of the simulation (monthly averages over the months simulated). */
+export interface SimYear {
+  y: number;
+  months: number;
+  saved: number;
+  contrib: Record<string, number>;
+  overflow: number;
+  emergency: number;
+  short: number;
+  left: number;
+  bal: Record<string, number>;
+}
+
+/** Month-by-month balances of every 529, savings account and investment. */
+export interface Sim {
+  years: Map<number, SimYear>;
+  at: Record<string, number>;
+  full: Record<string, number|null>;
+}
+
+/**
+ * Runs every contribution account month by month from today, for a primary retirement age.
+ * Each month: balances grow at their own rate; emergency costs are paid from the emergency funds
+ * (what they can't cover reduces that month's left-over); contributions are split with
+ * `contributions` from that year's income minus spending; a savings account at its max sends the
+ * rest to its overflow investment. 529s stop at graduation, investments and savings marked
+ * stops_at_retirement stop once everyone has retired.
+ *
+ * `at` holds each 529's balance at graduation and each investment's when the last partner
+ * retires; `full` the year each savings account with a max first reaches it (null: never).
+ * @param d The data.
+ * @param s Settings.
+ * @param a Primary partner's retirement age.
+ */
+export function simulate(d: Data, s: Settings, a = s.rs.age): Sim {
+  const key = JSON.stringify([s.st, s.cs, s.rs, s.fs.health, s.fs.tax, s.fs.kg, s.fs.rt, a]);
+  let memo = SIM_CACHE.get(d);
+  if (!memo) SIM_CACHE.set(d, memo = new Map());
+  const hit = memo.get(key);
+  if (hit) return hit;
+  const {st, rs, cs} = s;
+  const base = baseRetirement(d, s, a);
+  const RY = base.year;
+  const invMonth = Math.round(base.yrs * 12);
+  const start = d.todayMonth - 1;
+  const n = (Math.max(d.todayYear + PROJECTION_YEARS, RY + 1) - d.todayYear) * 12 - start;
+  const mr = (pct: number) => Math.pow(1 + pct / 100, 1 / 12) - 1;
+  interface Acct {key: string; bal: number; i: number; until: number; stops: boolean;
+                  cap: number|null; to: string|null; fund: boolean}
+  const accts: Acct[] = [
+    ...d.children.map((c, k) => ({key: `529:${c.id}`, bal: c.college_529.balance,
+      i: mr(cs[c.id]?.ret ?? 0), until: d.timelines[k].months_to_graduation, stops: false,
+      cap: null, to: null, fund: false})),
+    ...d.p.savings.map((sv) => {
+      const to = overflowTarget(d, sv);
+      return {key: `sav:${sv.id}`, bal: sv.balance, i: mr(sv.return_pct), until: Infinity,
+        stops: sv.stops_at_retirement, cap: sv.max_balance, to: to && `inv:${to}`,
+        fund: sv.type === 'emergency'};
+    }),
+    ...d.p.investments.map((v) => ({key: `inv:${v.id}`, bal: rs.inv[v.id]?.bal ?? v.balance,
+      i: mr(rs.inv[v.id]?.ret ?? v.return_pct), until: Infinity, stops: true, cap: null,
+      to: null, fund: false})),
+  ];
+  const byKey = new Map(accts.map((x) => [x.key, x]));
+  const at: Record<string, number> = {};
+  const full: Record<string, number|null> = {};
+  accts.forEach((x) => {
+    if (x.cap != null) full[x.key] = x.bal >= x.cap - 0.5 ? d.todayYear : null;
+  });
+  const years = new Map<number, SimYear>();
+  let inv: IncomePart[]|null = null;
+  const flows = new Map<number, {free: number; emergency: number}>();
+  const flowsAt = (y: number) => {
+    let f = flows.get(y);
+    if (!f) {
+      const x = spendingAt(d, s, y, RY);
+      if (y >= RY && !inv) inv = investmentParts(d, s, base.yrs, snapshot('inv:'));
+      const income = incomeFrom(d, s, {...base, parts: [...base.parts, ...(inv ?? [])]}, y);
+      f = {free: income - x.spend, emergency: x.emergency};
+      flows.set(y, f);
+    }
+    return f;
+  };
+  const snapshot = (prefix: string) => {
+    accts.filter((x) => x.key.startsWith(prefix) && !(x.key in at)).forEach((x) => at[x.key] = x.bal);
+    return at;
+  };
+  for (let m = 0; m < n; m++) {
+    const y = d.todayYear + Math.floor((start + m) / 12);
+    const ret = y >= RY;
+    accts.forEach((x) => {
+      if (x.key.startsWith('529:') && m === x.until) at[x.key] = x.bal;
+    });
+    if (m === invMonth) snapshot('inv:');
+    const f = flowsAt(y);
+    let need = f.emergency;
+    accts.filter((x) => x.fund).forEach((x) => {
+      const take = Math.min(Math.max(0, x.bal), need);
+      x.bal -= take;
+      need -= take;
+    });
+    const active = accts.filter((x) => m < x.until && !(ret && x.stops));
+    const c = contributions(active.map((x) => [x.key, st.sav[x.key]]), f.free - need);
+    accts.forEach((x) => x.bal *= 1 + x.i);
+    let overflow = 0;
+    let kept = 0;
+    active.forEach((x) => {
+      let v = c.amt[x.key] ?? 0;
+      if (x.cap != null) {
+        const into = Math.max(0, Math.min(v, x.cap - x.bal));
+        const spill = v - into;
+        v = into;
+        const target = x.to ? byKey.get(x.to) : undefined;
+        if (spill > 0 && target) {
+          target.bal += spill;
+          overflow += spill;
+        } else {
+          kept += spill;
+        }
+      }
+      x.bal += v;
+      if (x.cap != null && full[x.key] == null && x.bal >= x.cap - 0.5) full[x.key] = y;
+    });
+    let yr = years.get(y);
+    if (!yr) {
+      yr = {y, months: 0, saved: 0, contrib: {}, overflow: 0, emergency: 0, short: 0, left: 0,
+        bal: {}};
+      years.set(y, yr);
+    }
+    yr.months++;
+    Object.entries(c.amt).forEach(([k, v]) => yr!.contrib[k] = (yr!.contrib[k] ?? 0) + v);
+    yr.saved += sum(Object.values(c.amt)) - kept;
+    yr.overflow += overflow;
+    yr.emergency += f.emergency - need;
+    yr.short += need;
+    yr.left += c.left + kept;
+    accts.forEach((x) => yr!.bal[x.key] = x.bal);
+  }
+  accts.forEach((x) => {
+    if (!(x.key in at)) at[x.key] = x.bal;
+  });
+  years.forEach((yr) => {
+    const k = yr.months;
+    Object.keys(yr.contrib).forEach((c) => yr.contrib[c] /= k);
+    yr.saved /= k;
+    yr.overflow /= k;
+    yr.emergency /= k;
+    yr.short /= k;
+    yr.left /= k;
+  });
+  const sim = {years, at, full};
+  if (memo.size > 200) memo.clear();
+  memo.set(key, sim);
+  return sim;
 }
 
 /** Inflation multiplier for showing a year in future dollars (1 in today's dollars). */
@@ -685,10 +842,12 @@ export function settingLabel(d: Data, path: string[]): string {
     if (k === 'inc') return sub === 'other' ? 'Other income' : `${who(sub)} take-home`;
     if (k === 'sav') {
       const [type, id] = [sub.slice(0, sub.indexOf(':')), sub.slice(sub.indexOf(':') + 1)];
-      if (type === '529') return `529, ${kid(id)}`;
-      const list = type === 'inv' ? d.p.investments : d.p.savings;
-      const name = list.find((x) => x.id === id)?.name ?? id;
-      return type === 'inv' ? `${name} per month` : name;
+      const list: Array<{id: string; name: string}> = type === 'inv' ? d.p.investments :
+          d.p.savings;
+      const name = type === '529' ? `529, ${kid(id)}` : list.find((x) => x.id === id)?.name ?? id;
+      const what: Record<string, string> = {mode: 'contribution', amt: 'per month',
+        pct: 'share of left-over', min: 'at least per month', max: 'at most per month'};
+      return `${name}: ${what[leaf] ?? leaf}`;
     }
     if (k === 'on') return catLabel(sub);
     if (k === 'plan') return `Planned: ${sub}`;
@@ -731,7 +890,11 @@ export function settingLabel(d: Data, path: string[]): string {
 /** A readable value for a settings path. */
 export function settingVal(d: Data, path: string[], v: unknown): string {
   if (v === undefined) return '–';
-  if (v === null) return path[1] === 'ages' ? `same year as ${d.primary.name}` : 'at retirement';
+  if (v === null) {
+    if (path[1] === 'sav') return 'none';
+    return path[1] === 'ages' ? `same year as ${d.primary.name}` : 'at retirement';
+  }
+  if (path[1] === 'sav' && path[3] === 'mode') return v === 'pct' ? '% of left-over' : 'fixed';
   if (typeof v === 'boolean') return v ? 'On' : 'Off';
   if (path[0] === 'cs' && path[2] === 'school') {
     return d.p.assumptions.college.schools[String(v)]?.name ?? String(v);
@@ -775,6 +938,7 @@ export function expand(d: Data, c: {d?: Array<[string[], unknown]>}): Settings {
   const out = clone(defs) as unknown as Record<string, unknown>;
   const known = new Set(flatten(defs).map(([k]) => k));
   (c.d ?? []).forEach(([path, v]) => {
+    if (path[1] === 'sav' && path.length === 3 && typeof v === 'number') path = [...path, 'amt'];
     if (known.has(JSON.stringify(path))) setPath(out, path, v);
   });
   return out as unknown as Settings;
@@ -783,6 +947,7 @@ export function expand(d: Data, c: {d?: Array<[string[], unknown]>}): Settings {
 //
 // INTERNAL
 //
+const SIM_CACHE = new WeakMap<Data, Map<string, Sim>>();
 const SKIP = new Set([JSON.stringify(['fs', 'nominal'])]);
 const PCT_KEYS = new Set(['raise', 'ret', 'inf', 'wd', 'tax']);
 
@@ -790,10 +955,134 @@ const PCT_KEYS = new Set(['raise', 'ret', 'inf', 'wd', 'tax']);
 function isPct(path: string[]): boolean {
   if (path[0] === 'rs' && path[1] === 'inv') return path[3] === 'ret';
   if (path[0] === 'cs') return path[2] === 'ret' || path[2] === 'inf';
+  if (path[1] === 'sav') return path[3] === 'pct';
   return path[0] !== 'st' && PCT_KEYS.has(path[1]);
 }
 
 /** Equality for leaf values. */
 function same(a: unknown, b: unknown): boolean {
   return a === b || JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** Settings saved before contributions had modes: plain numbers become fixed lines. */
+function upgrade<T extends Partial<Settings>>(s: T): T {
+  const sav = s.st?.sav as Record<string, unknown>|undefined;
+  if (!sav || !Object.values(sav).some((v) => typeof v === 'number')) return s;
+  const out = clone(s);
+  const o = out.st!.sav as Record<string, unknown>;
+  Object.entries(o).forEach(([k, v]) => {
+    if (typeof v === 'number') o[k] = {mode: 'fixed', amt: v};
+  });
+  return out;
+}
+
+/**
+ * Retirement income without the investments: pensions, accounts and Social Security, with each
+ * partner's retirement age and year.
+ */
+function baseRetirement(d: Data, s: Settings, a: number):
+    Pick<RetireResult, 'age'|'yrs'|'year'|'years'|'ages'|'parts'> {
+  const rs = s.rs;
+  const year = retireYear(d, rs, a);
+  const yrs = Math.max(a - d.primary.age, ...d.partners.map((p) =>
+      partnerRetireAge(d, rs, p, a) - p.age));
+  const r = rs.ret / 100;
+  const real = (y: number) => Math.pow(1 + rs.inf / 100, y);
+  const wd = rs.wd / 100 / 12;
+  const parts: IncomePart[] = [];
+  const ages: Record<string, number> = {};
+  const years: Record<string, number> = {};
+  d.partners.forEach((p) => {
+    const ageR = partnerRetireAge(d, rs, p, a);
+    const pYrs = ageR - p.age;
+    ages[p.id] = ageR;
+    years[p.id] = partnerRetireYear(d, rs, p, a);
+    p.pensions.forEach((pn, i) => {
+      const key = `${p.id}:${i}`;
+      const st = rs.pen[key];
+      if (!st?.on) return;
+      let v = st.monthly != null ? st.monthly :
+          interpolatePension(st.est, ageR, p.age, pn.service_years_now);
+      if (pn.grows_with_raises) {
+        v *= Math.pow(1 + (rs.raise[p.id] ?? 0) / 100, Math.max(0, ageR - p.age - 1.5));
+      }
+      parts.push({kind: 'pension', key, name: pn.name, partner: p.id, value: v, started: true});
+    });
+    p.accounts.forEach((ac, i) => {
+      const key = `${p.id}:${i}`;
+      const st = rs.acct[key];
+      if (!st?.on) return;
+      const bal = fv(st.bal, st.monthly, Math.round(pYrs * 12), r);
+      parts.push({kind: 'account', key, name: ac.name, partner: p.id, value: bal / real(pYrs) * wd,
+        balance: bal, yrs: pYrs, started: true});
+    });
+  });
+  if (rs.ss) {
+    d.partners.forEach((p) => {
+      const ageR = ages[p.id];
+      const want = rs.claim[p.id];
+      const claimAge = want == null ? Math.max(62, ageR) : Math.min(70, Math.max(want, ageR));
+      const value = (rs.ssAmt[p.id] ?? 0) * ssFactor(claimAge);
+      if (!value) return;
+      const ageThen = ageR + year - years[p.id];
+      parts.push({kind: 'ss', key: p.id, name: `${p.name} Social Security`, partner: p.id, value,
+        started: ageThen >= claimAge - 0.01, claimAge,
+        start: yearAtAge(d, p, Math.ceil(claimAge - 0.01))});
+    });
+  }
+  return {age: a, yrs, year, years, ages, parts};
+}
+
+/** Investment income from balances at retirement (keys inv:<id>). */
+function investmentParts(d: Data, s: Settings, yrs: number, bals: Record<string, number>):
+    IncomePart[] {
+  const real = Math.pow(1 + s.rs.inf / 100, yrs);
+  const wd = s.rs.wd / 100 / 12;
+  const out: IncomePart[] = [];
+  d.p.investments.forEach((v) => {
+    const bal = bals[`inv:${v.id}`] ?? 0;
+    if (!s.rs.inv[v.id] || bal <= 0) return;
+    out.push({kind: 'investment', key: v.id, name: v.name, partner: '', value: bal / real * wd,
+      balance: bal, yrs, started: true});
+  });
+  return out;
+}
+
+/** Take-home income in a year from retirement results (see incomeAt). */
+function incomeFrom(d: Data, s: Settings, R: Pick<RetireResult, 'year'|'years'|'parts'>,
+                    y: number): number {
+  const {st, rs, fs} = s;
+  const n = Math.max(0, y - d.todayYear);
+  const pay = sum(d.partners.filter((p) => y < R.years[p.id]).map((p) =>
+      (st.inc[p.id] ?? 0) * Math.pow(1 + (rs.raise[p.id] ?? 0) / 100, n))) +
+      (y < R.year ? st.inc.other ?? 0 : 0);
+  const paid = sum(R.parts.filter((x) => x.kind === 'investment' ? y >= R.year :
+      y >= R.years[x.partner] && (x.kind !== 'ss' || y >= (x.start ?? 0))).map((x) => x.value));
+  return pay + paid * (1 - fs.tax / 100);
+}
+
+/** Spending in a year, without contributions (see spendAt). */
+function spendingAt(d: Data, s: Settings, y: number, retYear: number):
+    Omit<YearSpend, 'savings'|'short'> {
+  const {st, fs} = s;
+  const t = y + 0.5;
+  const total = d.children.length;
+  const kids = d.children.filter((_, k) => t < d.gradT(k)).length;
+  const gone = total ? (total - kids) / total : 0;
+  const ret = y >= retYear;
+  const cats: Record<string, number> = {};
+  let living = 0;
+  d.regular.forEach((i) => {
+    const n = d.cats[i].name;
+    let v = (st.plan[n] ?? 0) * Math.max(0, 1 + gone * (fs.kg[n] ?? 0) / 100);
+    if (ret) v *= Math.max(0, 1 + (fs.rt[n] ?? 0) / 100);
+    cats[n] = v;
+    living += v;
+  });
+  const em = emergencyMo(d, st, ret);
+  living += extraMo(d, st, ret) - creditsMo(d, st, ret) + (d.funds.length ? 0 : em);
+  const tax = taxMo(d, st, ret);
+  const health = ret ? fs.health : 0;
+  return {y, kids, ret, cats, living, tax, health, emergency: d.funds.length ? em : 0,
+    spend: living + tax + health};
 }
