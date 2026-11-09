@@ -21,7 +21,7 @@ from typing import Any
 #
 STATE_DIR: str = '.financial_planner'
 STATE_FILE: str = 'state.json'
-ALLOWED_KEYS: tuple[str, ...] = ('ui', 'scenarios')
+ALLOWED_KEYS: tuple[str, ...] = ('ui', 'scenarios', 'budgets', 'presets')
 
 
 #
