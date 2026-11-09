@@ -100,8 +100,10 @@ try{var t=localStorage.getItem('fp-theme');if(t==='light'||t==='dark'){document.
       </div>
       <div class="side">
         <div class="panel"><h3>Income (take-home)</h3><div id="inc-rows" style="display:grid;gap:10px"></div></div>
-        <div class="panel"><h3>Savings</h3><div id="sav-rows" style="display:grid;gap:10px"></div><p class="small muted" id="sav-note"></p></div>
-        <div class="panel" id="ot-panel"><h3>Yearly and one-time costs</h3><div id="ot-rows" style="display:grid;gap:10px"></div></div>
+        <div class="panel"><h3>Savings</h3><div id="sav-rows" style="display:grid;gap:14px"></div><p class="small muted" id="sav-note"></p></div>
+        <div class="panel" id="cost-annual" hidden><h3>Annual expenses</h3><div class="cost-rows" style="display:grid;gap:10px"></div></div>
+        <div class="panel" id="cost-one_time" hidden><h3>1-time purchases</h3><div class="cost-rows" style="display:grid;gap:10px"></div></div>
+        <div class="panel" id="cost-emergency" hidden><h3>Emergency fund costs</h3><div class="cost-rows" style="display:grid;gap:10px"></div><p class="small muted" id="em-note"></p></div>
         <div class="btns"><button class="btn" id="reset" type="button">Reset to averages</button><button class="btn" id="trim" type="button">Try 10% less on flexible spending</button></div>
         <p class="small muted" id="trim-note"></p>
       </div>
@@ -201,6 +203,7 @@ try{var t=localStorage.getItem('fp-theme');if(t==='light'||t==='dark'){document.
       <p class="small muted" id="f-cap"></p>
     </div>
     <div class="panel ptable-scroll"><table class="rtable" id="f-phases"></table></div>
+    <div class="panel ptable-scroll" id="f-bal-panel" hidden><h3 style="margin-bottom:6px">Savings balances</h3><p class="small muted" id="f-bal-note" style="margin-bottom:8px"></p><table class="rtable" id="f-bal"></table></div>
     <div class="retire">
       <div class="panel ptable-scroll">
         <h3 style="margin-bottom:6px">Category changes</h3>
