@@ -10,7 +10,10 @@
 //
 
 /** Category kinds; see the Python schema for their meaning. */
-export type Kind = 'spending'|'one_time'|'credit'|'ignore';
+export type Kind = 'spending'|'annual'|'one_time'|'emergency'|'credit'|'ignore';
+
+/** Cost kinds kept out of the averages, each with its own planner panel. */
+export type CostKind = 'annual'|'one_time'|'emergency';
 
 /** A category as configured. */
 export interface Category {
@@ -58,13 +61,42 @@ export interface Partner {
   accounts: Account[];
 }
 
+/** Contribution fields shared by 529s, savings and investments (see Python schema). */
+export interface Contribution {
+  monthly: number;
+  left_pct: number|null;
+  min_monthly: number|null;
+  max_monthly: number|null;
+}
+
+/** A savings account or emergency fund. */
+export interface SavingsAccount extends Contribution {
+  id: string;
+  name: string;
+  type: 'savings'|'emergency';
+  balance: number;
+  max_balance: number|null;
+  overflow_to: string|null;
+  return_pct: number;
+  stops_at_retirement: boolean;
+}
+
+/** A stock or bond account. */
+export interface Investment extends Contribution {
+  id: string;
+  name: string;
+  type: 'stocks'|'bonds';
+  balance: number;
+  return_pct: number;
+}
+
 /** One child. */
 export interface Child {
   id: string;
   name: string;
   age: number;
   hs_graduation: string|null;
-  college_529: {balance: number; monthly: number};
+  college_529: Contribution & {balance: number};
   school: string;
   note: string;
 }
@@ -117,12 +149,23 @@ export interface Payload {
   household: {partners: Partner[]; children: Child[]};
   children: ChildTimeline[];
   other_income_monthly: number;
-  savings: Array<{id: string; name: string; monthly: number; stops_at_retirement: boolean}>;
-  investments: Array<{id: string; name: string; balance: number; return_pct: number;
-                      monthly: number}>;
+  savings: SavingsAccount[];
+  investments: Investment[];
   assumptions: Assumptions;
   counts: {transactions: number; in_window: number};
   warnings: string[];
+}
+
+/**
+ * One contribution line in the planner: a fixed amount per month, or a percent of what is left
+ * over each month kept between an optional min and max.
+ */
+export interface SavLine {
+  mode: 'fixed'|'pct';
+  amt: number;
+  pct: number;
+  min: number|null;
+  max: number|null;
 }
 
 /**
@@ -131,7 +174,7 @@ export interface Payload {
  */
 export interface PlannerState {
   inc: Record<string, number>;
-  sav: Record<string, number>;
+  sav: Record<string, SavLine>;
   on: Record<string, boolean>;
   plan: Record<string, number>;
 }
