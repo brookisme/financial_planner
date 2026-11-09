@@ -9,8 +9,8 @@ import {describe, expect, it} from 'vitest';
 
 import {ageWhen, annualMo, budget, clone, compact, contributions, creditsMo, Data, defaults,
         describeData, diffBudget, diffSettings, expand, flatten, fv, incomeAt, interpolatePension,
-        kidCalc, rebase, rebaseBudget, results, retireYear, retirementIncome, simulate, spendAt,
-        ssFactor} from '../src/model';
+        kidCalc, rebase, rebaseBudget, results, retireYear, retirementIncome, retirementSavings,
+        simulate, spendAt, ssFactor} from '../src/model';
 import type {Category, Contribution, Payload, SavLine, Settings} from '../src/types';
 
 //
@@ -348,6 +348,18 @@ describe('pensions and Social Security', () => {
     const acct5 = retirementIncome(d, s, 65).parts.find((x) => x.kind === 'account')!;
     expect(acct5.value).toBeCloseTo(acct.value * 5 / 4, 6);
     expect(incomeAt(d, s, 2041)).toBe(13000);             // savings pay out once retired
+  });
+
+  it('adds up what goes into the accounts and what they grow to', () => {
+    const {d, s} = setup();
+    s.rs.inv.br = {bal: 50000, ret: 6};
+    s.st.sav['inv:br'].amt = 500;
+    const t = retirementSavings(d, s, 65);
+    // 403b: 100000, no contributions; brokerage: 50000 + 500 × 180; savings: 500 × 180
+    expect(t.invested).toBeCloseTo(100000 + 50000 + 500 * 180 + 500 * 180, 6);
+    expect(t.total).toBeCloseTo(100000 * Math.pow(1.055, 15) + closedFv(50000, 500, 180, 0.06) +
+                                500 * 180, 4);
+    expect(t.today).toBeCloseTo(t.total / Math.pow(1.03, 15), 4);
   });
 
   it('scales the pension with real raises', () => {
