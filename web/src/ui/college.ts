@@ -6,7 +6,7 @@
 
 import {$, $in, app, changed, num, onChange} from '../app';
 import {esc, fmt} from '../format';
-import {kidCalc} from '../model';
+import {budget, kidCalc} from '../model';
 import {fillPlanner} from './planner';
 
 //
@@ -50,7 +50,7 @@ export function buildCollege(): void {
     const cs = () => app.S.cs[c.id];
     const card = $(`kid-${c.id}`);
     $in(`kc-${c.id}`).addEventListener('input', (e) => {
-      app.S.st.sav[`529:${c.id}`] = num(e.target as HTMLInputElement);
+      app.S.st.sav[`529:${c.id}`].amt = num(e.target as HTMLInputElement);
       fillPlanner();
       changed();
     });
@@ -96,10 +96,13 @@ function updateCollege(): void {
   const col = d.p.assumptions.college;
   d.children.forEach((c, k) => {
     const s = app.S.cs[c.id];
-    const m = app.S.st.sav[`529:${c.id}`] ?? 0;
+    const pct = app.S.st.sav[`529:${c.id}`]?.mode === 'pct';
+    const m = budget(d, app.S.st).amt[`529:${c.id}`] ?? 0;
     const card = $(`kid-${c.id}`);
     const kc = $in(`kc-${c.id}`);
-    if (document.activeElement !== kc) kc.value = String(m);
+    kc.disabled = pct;
+    kc.title = pct ? 'A share of the left-over: change it in the planner\'s Savings box' : '';
+    if (document.activeElement !== kc) kc.value = String(Math.round(m));
     const ky = $in(`ky-${c.id}`);
     if (document.activeElement !== ky) ky.value = String(s.cost);
     $in(`kr-${c.id}`).value = String(s.ret);
@@ -114,12 +117,12 @@ function updateCollege(): void {
       cb.checked = p.return_pct === s.ret && p.inflation_pct === s.inf;
     });
     const x = kidCalc(d, app.S, k);
-    const pct = Math.round(x.pct * 100);
+    const cov = Math.round(x.pct * 100);
     $(`ko-${c.id}`).innerHTML = `
       <span class="eyebrow" style="grid-column:1/-1">Covered</span>
-      <span class="big ${x.pct >= 1 ? 'pos' : ''}" style="grid-column:1/-1">${pct}%</span>
+      <span class="big ${x.pct >= 1 ? 'pos' : ''}" style="grid-column:1/-1">${cov}%</span>
       <div class="meter ${x.pct >= 1 ? 'full' : ''}" style="grid-column:1/-1" role="img"
-        aria-label="${pct} percent covered"><i style="width:${Math.min(100, x.pct * 100)}%"></i></div>
+        aria-label="${cov} percent covered"><i style="width:${Math.min(100, x.pct * 100)}%"></i></div>
       <span>529 at graduation</span><span class="num">${fmt(x.bal)}</span>
       <span>${col.years}-year cost, ${esc(d.timelines[k].college_years)}</span><span class="num">${
         fmt(x.cost)}</span>
