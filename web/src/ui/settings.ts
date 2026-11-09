@@ -19,7 +19,8 @@ const KINDS: Array<[string, string]> = [['spending', 'Regular'], ['annual', 'Ann
   ['one_time', '1-time purchase'], ['emergency', 'Emergency fund cost'],
   ['credit', 'Credit (money in)'], ['ignore', 'Ignore']];
 const MODES: Array<[string, string]> = [['fixed', 'Fixed $ per month'],
-  ['pct', '% of what is left each month']];
+  ['pct', '% of what is left each month'],
+  ['rest', 'The rest (split evenly with other "rest" lines)']];
 const CLAIM_AGES = [62, 63, 64, 65, 66, 67, 68, 69, 70];
 
 //
@@ -46,7 +47,7 @@ export async function showSettings(tab = 'household'): Promise<void> {
     return;
   }
   root.innerHTML = `<div class="sec-head"><h2 id="settings-title">Settings</h2>
-      <a class="btn" href="#planner" style="text-decoration:none">Back to the budget</a></div>
+      <a class="btn" href="#budget" style="text-decoration:none">Back to the budget</a></div>
     <p class="small muted">Plan folder <span class="mono">${esc(cfg.plan_dir)}</span>. Changes are
       saved to the YAML files in its <span class="mono">config</span> folder (you can also edit
       them by hand). Keep this folder private: it holds your financial data.</p>
@@ -466,13 +467,16 @@ function renderMoney(el: HTMLElement): void {
   });
 }
 
-/** Contribution fields: a fixed amount, or a % of the left-over with an optional min / max. */
+/**
+ * Contribution fields: a fixed amount, a % of the left-over with an optional min / max, or the
+ * rest of the left-over.
+ */
 function contribFields(r: Dict, prefix = '', label = 'Contribution'): string {
-  const pct = r.left_pct != null;
-  return select(`${prefix}_mode`, label, MODES, pct ? 'pct' : 'fixed') +
-      `<span class="contents" data-when="fixed"${pct ? ' hidden' : ''}>${
+  const mode = r.rest ? 'rest' : r.left_pct != null ? 'pct' : 'fixed';
+  return select(`${prefix}_mode`, label, MODES, mode) +
+      `<span class="contents" data-when="fixed"${mode === 'fixed' ? '' : ' hidden'}>${
         input(`${prefix}monthly`, 'Per month', r.monthly ?? 0, 'number')}</span>` +
-      `<span class="contents" data-when="pct"${pct ? '' : ' hidden'}>${
+      `<span class="contents" data-when="pct"${mode === 'pct' ? '' : ' hidden'}>${
         input(`${prefix}left_pct`, '% of left-over', r.left_pct ?? '', 'number')}${
         input(`${prefix}min_monthly`, 'At least per month', r.min_monthly ?? '', 'number',
               'Optional')}${
@@ -493,6 +497,8 @@ function wireModes(root: Element): void {
 /** Turns read contribution fields into config: % fields only when the mode is %. */
 function contribOut(f: Dict): Dict {
   const {_mode: mode, ...out} = f;
+  delete out.rest;
+  if (mode === 'rest') out.rest = true;
   if (mode === 'pct') {
     out.left_pct = out.left_pct ?? 0;
   } else {
@@ -503,8 +509,9 @@ function contribOut(f: Dict): Dict {
   return out;
 }
 
-/** A contribution for a card: "$500" or "25% of left-over". */
+/** A contribution for a card: "$500", "25% of left-over" or "the rest". */
 function contribText(c: Dict): string {
+  if (c.rest) return 'the rest';
   return c.left_pct != null ? `${c.left_pct}% of left-over` : fmt(+(c.monthly as number) || 0);
 }
 
@@ -842,11 +849,11 @@ function renderShare(el: HTMLElement): void {
   el.innerHTML = `<div class="panel form">
       <h3>Send your whole plan</h3>
       <p class="small">Saves everything in this plan as one <span class="mono">.zip</span> file:
-        settings, categories and rules, your CSV files, and (if ticked) your planner edits and
-        saved scenarios. Send it by AirDrop or Messages; the other person opens it in their
+        settings, categories and rules, your CSV files, and (if ticked) your budget edits and
+        saved budgets. Send it by AirDrop or Messages; the other person opens it in their
         Financial Planner and sees exactly what you see.</p>
-      <label class="field check"><input type="checkbox" id="sh-state" checked>Include my planner
-        edits and saved scenarios</label>
+      <label class="field check"><input type="checkbox" id="sh-state" checked>Include my budget
+        edits and saved budgets</label>
       <div class="btns"><a class="btn primary" id="sh-dl" href="/api/plan/export" download>Save plan
         as a file</a></div>
       <div class="banner"><b>This file contains your real transactions and finances.</b>
@@ -899,7 +906,7 @@ function renderCategories(el: HTMLElement): void {
   el.innerHTML = `<div class="panel" style="display:grid;gap:10px">
       <div class="sec-head"><h3>Categories</h3><span class="small muted">Saved in ${
         esc(fileOf('categories'))}. Renaming a category also updates the rules that use it.</span></div>
-      <p class="small muted"><b>Kind:</b> regular spending is averaged in the planner. Annual
+      <p class="small muted"><b>Kind:</b> regular spending is averaged in Spending and Budgeting. Annual
         expenses (taxes, insurance), 1-time purchases and emergency fund costs each get an on/off
         toggle in their own planner box; emergency fund costs are paid from the emergency fund.
         Credits (money in) can be subtracted; ignore is for transfers, card payments and
