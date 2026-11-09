@@ -7,11 +7,10 @@
 
 import {describe, expect, it} from 'vitest';
 
-import {ageWhen, budget, clone, compact, creditsMo, Data, defaults, describeData, diffSettings,
-        expand, flatten,
-        fv, incomeAt, interpolatePension, kidCalc, rebase, results, retireYear,
-        retirementIncome, spendAt, ssFactor, taxMo} from '../src/model';
-import type {Category, Payload, Settings} from '../src/types';
+import {ageWhen, budget, clone, compact, contributions, creditsMo, Data, defaults, describeData,
+        diffSettings, expand, flatten, fv, incomeAt, interpolatePension, kidCalc, rebase, results,
+        retireYear, retirementIncome, simulate, spendAt, ssFactor, taxMo} from '../src/model';
+import type {Category, Contribution, Payload, SavLine, Settings} from '../src/types';
 
 //
 // CONSTANTS
@@ -59,9 +58,9 @@ function payload(): Payload {
       ],
       children: [
         {id: 'k1', name: 'Older', age: 10, hs_graduation: null,
-         college_529: {balance: 40000, monthly: 800}, school: 'state', note: ''},
+         college_529: {balance: 40000, ...fixed(800)}, school: 'state', note: ''},
         {id: 'k2', name: 'Younger', age: 6, hs_graduation: null,
-         college_529: {balance: 15000, monthly: 800}, school: 'state', note: ''},
+         college_529: {balance: 15000, ...fixed(800)}, school: 'state', note: ''},
       ],
     },
     children: [
@@ -71,8 +70,10 @@ function payload(): Payload {
        college_years: '2038–2042'},
     ],
     other_income_monthly: 0,
-    savings: [{id: 'em', name: 'Emergency', monthly: 500, stops_at_retirement: true}],
-    investments: [{id: 'br', name: 'Brokerage', balance: 0, return_pct: 0, monthly: 0}],
+    savings: [{id: 'em', name: 'Emergency', type: 'savings', balance: 0, max_balance: null,
+               overflow_to: null, return_pct: 0, stops_at_retirement: true, ...fixed(500)}],
+    investments: [{id: 'br', name: 'Brokerage', type: 'stocks', balance: 0, return_pct: 0,
+                   ...fixed(0)}],
     assumptions: {
       retirement: {return_pct: 5.5, inflation_pct: 3, withdrawal_pct: 4, tax_pct: 12,
         health_insurance_monthly: 1200, default_age: 65,
@@ -83,6 +84,16 @@ function payload(): Payload {
     },
     counts: {transactions: 0, in_window: 0}, warnings: [],
   };
+}
+
+/** Contribution fields for a fixed amount per month. */
+function fixed(monthly: number): Contribution {
+  return {monthly, left_pct: null, min_monthly: null, max_monthly: null};
+}
+
+/** A planner line with a fixed amount. */
+function line(amt: number, extra: Partial<SavLine> = {}): SavLine {
+  return {mode: 'fixed', amt, pct: 0, min: null, max: null, ...extra};
 }
 
 /** Closed-form future value with monthly compounding of an effective yearly rate. */
@@ -119,7 +130,8 @@ describe('defaults', () => {
     expect(s.st.plan.Refund).toBeUndefined();       // nested under a one-time cost
     expect(s.st.on).toEqual({'Income tax': true, 'Property tax': false, Furniture: false,
       Reimb: true, Refund: true, 'Other credits': false});
-    expect(s.st.sav).toEqual({'529:k1': 800, '529:k2': 800, 'sav:em': 500, 'inv:br': 0});
+    expect(s.st.sav).toEqual({'529:k1': line(800), '529:k2': line(800), 'sav:em': line(500),
+      'inv:br': line(0)});
     expect(s.cs.k1).toEqual({school: 'state', cost: 40000, ret: 6, inf: 4});
     expect(s.rs.pen['a:0'].est['60']).toBe(2500);
     expect(d.primary.id).toBe('a');
@@ -149,6 +161,89 @@ describe('monthly budget', () => {
   });
 });
 
+describe('contributions', () => {
+  it('takes fixed amounts first, then a share of the rest for each percent line', () => {
+    const pct = (p: number, extra: Partial<SavLine> = {}) => line(0, {mode: 'pct', pct: p, ...extra});
+    const c = contributions([['a', line(1000)], ['b', pct(50)], ['c', pct(10, {max: 100})],
+                             ['d', pct(10, {min: 500})]], 5000);
+    expect(c.amt).toEqual({a: 1000, b: 2000, c: 100, d: 500});
+    expect(c.left).toBe(1400);
+    expect(contributions([['x', pct(50, {min: 200})]], -100)).toEqual({amt: {x: 200}, left: -300});
+  });
+
+  it('puts a percent of the left-over into a line in the budget', () => {
+    const {d, s} = setup();
+    expect(budget(d, s.st).left).toBe(8600);
+    s.st.sav['inv:br'] = line(0, {mode: 'pct', pct: 25});
+    const b = budget(d, s.st);
+    expect(b.amt['inv:br']).toBe(2150);
+    expect(b.investing).toBe(2150);
+    expect(b.left).toBe(6450);
+  });
+
+  it('recomputes percent lines each year from that year\'s left-over', () => {
+    const {d, s} = setup();
+    s.st.sav['inv:br'] = line(0, {mode: 'pct', pct: 50});
+    expect(spendAt(d, s, 2030).savings).toBe(2100 + 4300);
+    expect(spendAt(d, s, 2035).savings).toBeCloseTo(1300 + 9675 / 2, 8);   // older child out
+  });
+});
+
+describe('savings with a max', () => {
+  it('fills to the max, then sends the rest to the overflow investment', () => {
+    const p = payload();
+    Object.assign(p.savings[0], {balance: 9000, max_balance: 10000});
+    const d = new Data(p);
+    const s = defaults(d);
+    const sim = simulate(d, s);
+    expect(sim.full['sav:em']).toBe(2026);
+    expect(sim.years.get(2027)!.bal['sav:em']).toBe(10000);
+    expect(sim.at['inv:br']).toBe(500 * 178);
+    expect(retirementIncome(d, s, 65).parts.find((x) => x.kind === 'investment')!.balance)
+        .toBe(500 * 178);
+    expect(budget(d, s.st).overflow).toEqual({});
+    p.savings[0].balance = 10000;
+    const b = budget(new Data(p), s.st);
+    expect(b.overflow).toEqual({'sav:em': 'br'});
+    expect([b.savings, b.investing]).toEqual([1600, 500]);
+  });
+
+  it('never fills when the max is out of reach', () => {
+    const p = payload();
+    Object.assign(p.savings[0], {max_balance: 1e9});
+    const d = new Data(p);
+    expect(simulate(d, defaults(d)).full['sav:em']).toBeNull();
+  });
+});
+
+describe('emergency costs', () => {
+  /** The fixture with a $600/mo emergency cost (on by default). */
+  function withEmergency(fund: boolean): {d: Data; s: Settings} {
+    const p = payload();
+    p.categories.push({...CAT_DEFAULTS, name: 'Car repair', kind: 'emergency', default_on: true});
+    p.by_cat.push([1200, 0]);
+    if (fund) Object.assign(p.savings[0], {type: 'emergency', balance: 3000});
+    const d = new Data(p);
+    return {d, s: defaults(d)};
+  }
+
+  it('count as spending when there is no emergency fund', () => {
+    const {d, s} = withEmergency(false);
+    expect(budget(d, s.st).spend).toBe(2000);
+    expect(spendAt(d, s, 2030).spend).toBe(2000 + 900);
+  });
+
+  it('come out of the emergency fund, and only the uncovered part hits the month', () => {
+    const {d, s} = withEmergency(true);
+    const b = budget(d, s.st);
+    expect([b.spend, b.emergency, b.left]).toEqual([1400, 600, 8600]);
+    // 3000 + 500/mo in - 600/mo out: covered for 25 months, then 100/mo short
+    expect(spendAt(d, s, 2026)).toMatchObject({emergency: 600, short: 0, spend: 2300});
+    expect(spendAt(d, s, 2028).short).toBeCloseTo(100 * 9 / 12, 8);
+    expect(spendAt(d, s, 2029)).toMatchObject({short: 100, spend: 2400});
+  });
+});
+
 describe('college', () => {
   it('compares the balance at graduation with the inflated cost of college', () => {
     const {d, s} = setup();
@@ -164,7 +259,7 @@ describe('college', () => {
   it('monthly-needed exactly funds college', () => {
     const {d, s} = setup();
     const x = kidCalc(d, s, 1);
-    s.st.sav['529:k2'] = x.need;
+    s.st.sav['529:k2'].amt = x.need;
     expect(kidCalc(d, s, 1).gap).toBeCloseTo(0, 4);
   });
 
@@ -172,7 +267,7 @@ describe('college', () => {
     const {d, s} = setup();
     s.cs.k1.ret = 0;
     const x = kidCalc(d, s, 0);
-    s.st.sav['529:k1'] = x.need;
+    s.st.sav['529:k1'].amt = x.need;
     expect(kidCalc(d, s, 0).gap).toBeCloseTo(0, 4);
   });
 });
@@ -221,7 +316,7 @@ describe('pensions and Social Security', () => {
     expect(acct.value).toBeCloseTo(bal / Math.pow(1.03, 15) * 0.04 / 12, 6);
     expect(R.parts.some((x) => x.kind === 'investment')).toBe(false);   // $0 brokerage is off
     s.rs.inv.br = {bal: 50000, ret: 6};
-    s.st.sav['inv:br'] = 500;
+    s.st.sav['inv:br'].amt = 500;
     const inv = retirementIncome(d, s, 65).parts.find((x) => x.kind === 'investment')!;
     expect(inv.balance).toBeCloseTo(closedFv(50000, 500, 180, 0.06), 4);
   });
@@ -330,6 +425,22 @@ describe('scenarios', () => {
     expect(rebase(defaults(d), {st: {plan: {Gone: 5}}} as never).st.plan.Gone).toBeUndefined();
   });
 
+  it('upgrades saved amounts from before contribution modes', () => {
+    const {d} = setup();
+    const out = rebase(defaults(d), {st: {sav: {'inv:br': 300}}} as never);
+    expect(out.st.sav['inv:br']).toEqual(line(300));
+    expect(expand(d, {d: [[['st', 'sav', 'inv:br'], 300]]}).st.sav['inv:br'].amt).toBe(300);
+  });
+
+  it('labels contribution modes in comparisons', () => {
+    const {d, s} = setup();
+    const b = clone(s);
+    b.st.sav['sav:em'] = line(500, {mode: 'pct', pct: 20});
+    expect(diffSettings(d, s, b).map((x) => [x[0], x[1], x[2]])).toEqual([
+      ['Emergency: contribution', 'fixed', '% of left-over'],
+      ['Emergency: share of left-over', '0%', '20%']]);
+  });
+
   it('compact / expand round-trips only the differences', () => {
     const {d, s} = setup();
     s.rs.age = 62;
@@ -346,10 +457,10 @@ describe('scenarios', () => {
     const {d, s} = setup();
     const b = clone(s);
     b.rs.age = 62;
-    b.st.sav['inv:br'] = 500;
+    b.st.sav['inv:br'].amt = 500;
     b.cs.k1.inf = 5;
     expect(diffSettings(d, s, b).map((x) => [x[0], x[1], x[2], x[4]])).toEqual([
-      ['Brokerage per month', '$0', '$500', 'budget'],
+      ['Brokerage: per month', '$0', '$500', 'budget'],
       ['Older: college cost inflation', '4%', '5%', 'college'],
       ['Retirement age', '65', '62', 'retire'],
     ]);
