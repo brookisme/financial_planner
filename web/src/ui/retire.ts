@@ -8,13 +8,15 @@
 import {$, $in, app, changed, hideTip, num, onChange, showTip} from '../app';
 import {esc, fk, fmt, niceStep, sum} from '../format';
 import {ageWhen, budget, clone, drawPct, type IncomePart, overflowTarget, retirementIncome,
-        retireSavings, retireYear, spendAt, spendToday, ssFactor} from '../model';
+        retirementSavings, retireSavings, retireYear, spendAt, spendToday,
+        ssFactor} from '../model';
 import {presetPicker} from './presets';
 
 //
 // CONSTANTS
 //
 const TABLE_AGES = [55, 58, 60, 62, 65, 67, 70];
+const FOLD_KEY = 'fp-retire-folded';
 
 //
 // PUBLIC
@@ -36,6 +38,7 @@ export function buildRetire(): void {
   buildOthers();
   buildPanels();
   buildAssumptions();
+  buildFolds();
   ra.addEventListener('input', () => {
     app.S.rs.age = +ra.value;
     changed();
@@ -87,13 +90,23 @@ function buildOthers(): void {
     const min = Math.max(50, Math.ceil(p.age));
     return `<div class="ctl"><div class="agehead"><span class="eyebrow">${esc(p.name)} retires at</span><span
       class="big num" id="rao-v-${esc(p.id)}"></span><span class="muted" id="rao-when-${
-      esc(p.id)}"></span></div><label class="small"><input type="checkbox" data-same="${esc(p.id)}">
-      same year as ${esc(d.primary.name)}</label><input type="range" data-rao="${esc(p.id)}" min="${
+      esc(p.id)}"></span></div><label class="small" title="While locked, moving either slider
+      moves both"><input type="checkbox" data-same="${esc(p.id)}"> lock: retire the same year as
+      ${esc(d.primary.name)}</label><input type="range" data-rao="${esc(p.id)}" min="${
       min}" max="${Math.max(min + 5, 75)}" step="1" aria-label="${esc(p.name)} retirement age"></div>`;
   }).join('');
   box.querySelectorAll<HTMLInputElement>('[data-rao]').forEach((el) => {
     el.addEventListener('input', () => {
-      app.S.rs.ages[el.dataset.rao!] = +el.value;
+      const id = el.dataset.rao!;
+      const rs = app.S.rs;
+      if (rs.ages[id] == null) {
+        // locked: move the primary partner so both still retire the same year
+        const p = d.partners.find((x) => x.id === id)!;
+        const ra = $in('ra');
+        rs.age = Math.max(+ra.min, Math.min(+ra.max, Math.round(+el.value - p.age + d.primary.age)));
+      } else {
+        rs.ages[id] = +el.value;
+      }
       changed();
     });
   });
@@ -245,6 +258,60 @@ function buildPanels(): void {
   });
 }
 
+/**
+ * Makes every card in the right column collapsible to its title line (so a change in a lower
+ * card is visible in the chart without scrolling). Folded cards are remembered in this browser.
+ */
+function buildFolds(): void {
+  const side = $('r-side');
+  const panels = [...side.querySelectorAll<HTMLElement>('.panel')];
+  let folded = new Set<string>();
+  try {
+    folded = new Set(JSON.parse(localStorage.getItem(FOLD_KEY) ?? '[]') as string[]);
+  } catch {
+    // storage unavailable: start with everything open
+  }
+  const keyOf = (el: HTMLElement) => el.querySelector('h3')?.textContent?.trim() ?? '';
+  const store = () => {
+    try {
+      localStorage.setItem(FOLD_KEY, JSON.stringify([...folded]));
+    } catch {
+      // not remembered, which is fine
+    }
+  };
+  const set = (el: HTMLElement, on: boolean) => {
+    el.classList.toggle('folded', on);
+    const b = el.querySelector<HTMLButtonElement>(':scope > .fold')!;
+    b.setAttribute('aria-expanded', String(!on));
+    b.textContent = on ? '▸' : '▾';
+    if (on) folded.add(keyOf(el));
+    else folded.delete(keyOf(el));
+  };
+  const allBtn = $('r-fold-all');
+  const markAll = () => {
+    allBtn.textContent = panels.every((p) => p.classList.contains('folded')) ? 'Expand all' :
+        'Collapse all';
+  };
+  panels.forEach((el) => {
+    el.classList.add('foldable');
+    el.insertAdjacentHTML('afterbegin', `<button class="fold" type="button" aria-expanded="true"
+      aria-label="Show or hide ${esc(keyOf(el))}">▾</button>`);
+    set(el, folded.has(keyOf(el)));
+    el.querySelector(':scope > .fold')!.addEventListener('click', () => {
+      set(el, !el.classList.contains('folded'));
+      store();
+      markAll();
+    });
+  });
+  allBtn.addEventListener('click', () => {
+    const fold = allBtn.textContent === 'Collapse all';
+    panels.forEach((el) => set(el, fold));
+    store();
+    markAll();
+  });
+  markAll();
+}
+
 /** Raises, presets and the rate sliders. */
 function buildAssumptions(): void {
   const d = app.d;
@@ -292,6 +359,12 @@ function drawRetire(): void {
     if (r) r.value = String(rs.raise[p.id] ?? 0);
   });
   markPreset();
+  const tot = retirementSavings(d, S);
+  $('r-totals').innerHTML = `<div><span class="eyebrow">Put in by retirement</span><span
+    class="v num">${fmt(tot.invested)}</span><span class="small muted">balances today plus every
+    contribution until ${tot.year - 1}</span></div><div><span class="eyebrow">Estimated total at
+    retirement</span><span class="v num">${fmt(tot.total)}</span><span class="small muted">with
+    returns, in ${tot.year - 1} dollars · ${fmt(tot.today)} in today's dollars</span></div>`;
   document.querySelectorAll<HTMLElement>('[data-drawv]').forEach((el) => {
     const key = el.dataset.drawv!;
     el.textContent = `${drawPct(rs, key)}%`;
