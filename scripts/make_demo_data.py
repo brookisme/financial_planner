@@ -125,6 +125,7 @@ def _card_rows(rng: random.Random) -> list[dict[str, str]]:
     add(10, 'SMILE DENTAL GROUP', 'Health Care', 310.00)
     add(2, 'SMILE DENTAL GROUP', 'Health Care', 185.00)
     add(11, 'COMFY FURNITURE CO', 'Merchandise', 2899.00)
+    add(9, 'QUICKFIX AUTO REPAIR', 'Gas/Automotive', 1640.00)
     add(12, 'TOY CASTLE', 'Merchandise', 412.75)
     add(12, 'HOLIDAY LIGHTS FAIR', 'Entertainment', 96.00)
     for month in range(1, 13):
