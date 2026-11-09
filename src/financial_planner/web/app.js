@@ -434,7 +434,8 @@
   }
   function retirementIncome(d, s, a) {
     const base = baseRetirement(d, s, a);
-    const inv = investmentParts(d, s, base.yrs, simulate(d, s, a).at);
+    const sim = simulate(d, s, a);
+    const inv = investmentParts(d, s, base.yrs, sim.at, sim.paid);
     const parts = [
       ...base.parts.filter((x) => x.kind !== "ss"),
       ...inv,
@@ -450,6 +451,17 @@
       later,
       full: total + later,
       fullYear: Math.max(0, ...pending.map((x) => x.start ?? 0))
+    };
+  }
+  function retirementSavings(d, s, a = s.rs.age) {
+    const R = retirementIncome(d, s, a);
+    const parts = R.parts.filter((x) => x.balance !== void 0);
+    const total = sum(parts.map((x) => x.balance));
+    return {
+      invested: sum(parts.map((x) => x.invested ?? 0)),
+      total,
+      today: sum(parts.map((x) => x.balance / Math.pow(1 + s.rs.inf / 100, x.yrs ?? R.yrs))),
+      year: R.year
     };
   }
   function spendAt(d, s, y) {
@@ -532,8 +544,13 @@
       }
       return f;
     };
+    const put = Object.fromEntries(accts.map((x) => [x.key, x.bal]));
+    const paid = {};
     const snapshot = (prefix) => {
-      accts.filter((x) => x.key.startsWith(prefix) && !(x.key in at)).forEach((x) => at[x.key] = x.bal);
+      accts.filter((x) => x.key.startsWith(prefix) && !(x.key in at)).forEach((x) => {
+        at[x.key] = x.bal;
+        paid[x.key] = put[x.key];
+      });
       return at;
     };
     for (let m = 0; m < n; m++) {
@@ -567,12 +584,14 @@
           const target = x.to ? byKey.get(x.to) : void 0;
           if (spill > 0 && target) {
             target.bal += spill;
+            put[target.key] += spill;
             overflow += spill;
           } else {
             kept += spill;
           }
         }
         x.bal += v;
+        put[x.key] += v;
         if (x.cap != null && full[x.key] == null && x.bal >= x.cap - 0.5) full[x.key] = y;
       });
       let yr = years.get(y);
@@ -601,6 +620,7 @@
     }
     accts.forEach((x) => {
       if (!(x.key in at)) at[x.key] = x.bal;
+      if (!(x.key in paid)) paid[x.key] = put[x.key];
     });
     years.forEach((yr) => {
       const k = yr.months;
@@ -611,7 +631,7 @@
       yr.short /= k;
       yr.left /= k;
     });
-    const sim = { years, at, full };
+    const sim = { years, at, paid, full };
     if (memo.size > 200) memo.clear();
     memo.set(key, sim);
     return sim;
@@ -813,6 +833,7 @@
           partner: p.id,
           value: bal / real(pYrs) * w,
           balance: bal,
+          invested: st.bal + st.monthly * Math.round(pYrs * 12),
           yrs: pYrs,
           started: true
         });
@@ -840,7 +861,7 @@
     }
     return { age: a, yrs, year, years, ages, parts };
   }
-  function investmentParts(d, s, yrs, bals) {
+  function investmentParts(d, s, yrs, bals, paid = {}) {
     const real = Math.pow(1 + s.rs.inf / 100, yrs);
     const out = [];
     const add = (kind, id, name) => {
@@ -854,6 +875,7 @@
         partner: "",
         value: bal / real * drawPct(s.rs, key) / 100 / 12,
         balance: bal,
+        invested: paid[key],
         yrs,
         started: true
       });
@@ -2316,10 +2338,14 @@
   function renderBar() {
     const a = active();
     const dirty2 = a ? dirtyFrom(a) : null;
-    const tabs = $("bg-tabs");
-    tabs.innerHTML = state.list.length ? state.list.map((b) => `<button type="button" class="chip"
-      data-id="${esc(b.id)}" aria-pressed="${b.id === state.active}">${esc(b.name)}${b.id === state.active && dirty2 ? " \u2022" : ""}</button>`).join("") : '<span class="small muted">No saved budgets yet. Name this one and save it.</span>';
-    $("bg-state").textContent = pendingSwitch ? "Unsaved changes will be lost. Click the budget again to switch." : a ? dirty2 ? `Unsaved changes to "${a.name}"` : `Showing "${a.name}"` : "Not saved as a budget yet";
+    const chips = state.list.map((b) => `<button type="button" class="chip" data-id="${esc(b.id)}" aria-pressed="${b.id === state.active}">${esc(b.name)}${b.id === state.active && dirty2 ? " \u2022" : ""}</button>`).join("");
+    document.querySelectorAll("[data-bg-tabs]").forEach((el) => {
+      el.innerHTML = chips || (el.id === "bg-tabs" ? '<span class="small muted">No saved budgets yet. Name this one and save it.</span>' : '<span class="small muted">No saved budgets yet. Save one in <a href="#budget">Budgeting</a>.</span>');
+    });
+    const line = pendingSwitch ? "Unsaved changes will be lost. Click the budget again to switch." : a ? dirty2 ? `Unsaved changes to "${a.name}"` : `Showing "${a.name}"` : "Not saved as a budget yet";
+    document.querySelectorAll("[data-bg-state]").forEach((el) => {
+      el.textContent = line;
+    });
     const up = $("bg-update");
     up.hidden = !a;
     up.textContent = a ? `Update "${a.name}"` : "Update";
@@ -2328,7 +2354,7 @@
     del.hidden = !a;
     del.textContent = pendingDel ? "Click again to delete" : "Delete";
     $("bg-reset").textContent = pendingReset ? "Click again to start over" : "Start from averages";
-    tabs.querySelectorAll("button").forEach((btn) => {
+    document.querySelectorAll("[data-bg-tabs] button").forEach((btn) => {
       btn.addEventListener("click", () => {
         const id = btn.dataset.id;
         if (id === state.active) return;
@@ -2924,6 +2950,7 @@
 
   // src/ui/retire.ts
   var TABLE_AGES = [55, 58, 60, 62, 65, 67, 70];
+  var FOLD_KEY = "fp-retire-folded";
   function buildRetire() {
     const d = app.d;
     const p = d.primary;
@@ -2937,6 +2964,7 @@
     buildOthers();
     buildPanels();
     buildAssumptions();
+    buildFolds();
     ra.addEventListener("input", () => {
       app.S.rs.age = +ra.value;
       changed();
@@ -2980,12 +3008,21 @@
     box.innerHTML = others.map((p) => {
       const min = Math.max(50, Math.ceil(p.age));
       return `<div class="ctl"><div class="agehead"><span class="eyebrow">${esc(p.name)} retires at</span><span
-      class="big num" id="rao-v-${esc(p.id)}"></span><span class="muted" id="rao-when-${esc(p.id)}"></span></div><label class="small"><input type="checkbox" data-same="${esc(p.id)}">
-      same year as ${esc(d.primary.name)}</label><input type="range" data-rao="${esc(p.id)}" min="${min}" max="${Math.max(min + 5, 75)}" step="1" aria-label="${esc(p.name)} retirement age"></div>`;
+      class="big num" id="rao-v-${esc(p.id)}"></span><span class="muted" id="rao-when-${esc(p.id)}"></span></div><label class="small" title="While locked, moving either slider
+      moves both"><input type="checkbox" data-same="${esc(p.id)}"> lock: retire the same year as
+      ${esc(d.primary.name)}</label><input type="range" data-rao="${esc(p.id)}" min="${min}" max="${Math.max(min + 5, 75)}" step="1" aria-label="${esc(p.name)} retirement age"></div>`;
     }).join("");
     box.querySelectorAll("[data-rao]").forEach((el) => {
       el.addEventListener("input", () => {
-        app.S.rs.ages[el.dataset.rao] = +el.value;
+        const id = el.dataset.rao;
+        const rs = app.S.rs;
+        if (rs.ages[id] == null) {
+          const p = d.partners.find((x) => x.id === id);
+          const ra = $in("ra");
+          rs.age = Math.max(+ra.min, Math.min(+ra.max, Math.round(+el.value - p.age + d.primary.age)));
+        } else {
+          rs.ages[id] = +el.value;
+        }
         changed();
       });
     });
@@ -3102,6 +3139,52 @@
       });
     });
   }
+  function buildFolds() {
+    const side = $("r-side");
+    const panels = [...side.querySelectorAll(".panel")];
+    let folded = /* @__PURE__ */ new Set();
+    try {
+      folded = new Set(JSON.parse(localStorage.getItem(FOLD_KEY) ?? "[]"));
+    } catch {
+    }
+    const keyOf = (el) => el.querySelector("h3")?.textContent?.trim() ?? "";
+    const store = () => {
+      try {
+        localStorage.setItem(FOLD_KEY, JSON.stringify([...folded]));
+      } catch {
+      }
+    };
+    const set = (el, on2) => {
+      el.classList.toggle("folded", on2);
+      const b = el.querySelector(":scope > .fold");
+      b.setAttribute("aria-expanded", String(!on2));
+      b.textContent = on2 ? "\u25B8" : "\u25BE";
+      if (on2) folded.add(keyOf(el));
+      else folded.delete(keyOf(el));
+    };
+    const allBtn = $("r-fold-all");
+    const markAll = () => {
+      allBtn.textContent = panels.every((p) => p.classList.contains("folded")) ? "Expand all" : "Collapse all";
+    };
+    panels.forEach((el) => {
+      el.classList.add("foldable");
+      el.insertAdjacentHTML("afterbegin", `<button class="fold" type="button" aria-expanded="true"
+      aria-label="Show or hide ${esc(keyOf(el))}">\u25BE</button>`);
+      set(el, folded.has(keyOf(el)));
+      el.querySelector(":scope > .fold").addEventListener("click", () => {
+        set(el, !el.classList.contains("folded"));
+        store();
+        markAll();
+      });
+    });
+    allBtn.addEventListener("click", () => {
+      const fold = allBtn.textContent === "Collapse all";
+      panels.forEach((el) => set(el, fold));
+      store();
+      markAll();
+    });
+    markAll();
+  }
   function buildAssumptions() {
     const d = app.d;
     $("r-raises").innerHTML = d.partners.map((p) => `<div class="ctl"><label>${esc(p.name)} yearly
@@ -3148,6 +3231,12 @@
       if (r) r.value = String(rs.raise[p.id] ?? 0);
     });
     markPreset();
+    const tot = retirementSavings(d, S);
+    $("r-totals").innerHTML = `<div><span class="eyebrow">Put in by retirement</span><span
+    class="v num">${fmt(tot.invested)}</span><span class="small muted">balances today plus every
+    contribution until ${tot.year - 1}</span></div><div><span class="eyebrow">Estimated total at
+    retirement</span><span class="v num">${fmt(tot.total)}</span><span class="small muted">with
+    returns, in ${tot.year - 1} dollars \xB7 ${fmt(tot.today)} in today's dollars</span></div>`;
     document.querySelectorAll("[data-drawv]").forEach((el) => {
       const key = el.dataset.drawv;
       el.textContent = `${drawPct(rs, key)}%`;
