@@ -66,8 +66,16 @@ graduation month if they know it.
 
 ### 3. Savings, investments, assumptions
 
-- Other monthly income; monthly transfers to savings (`savings`); brokerage / stock accounts
-  (`investments`: balance, a return % or 0 to leave it off, monthly additions).
+- Other monthly income.
+- `savings`: a savings account (`type: savings`) and an emergency fund (`type: emergency`), each
+  with `balance`, an optional `max_balance` (past it, contributions go to the `overflow_to`
+  investment, by default the first one) and `return_pct` (interest).
+- `investments`: stocks (`type: stocks`) and bonds (`type: bonds`), each with `balance` and a
+  return % (0 leaves it off).
+- Every 529, savings account and investment contributes either a fixed `monthly` amount or
+  `left_pct`, a percent of what is left over each month after spending, taxes and the fixed
+  amounts, with optional `min_monthly` / `max_monthly`. Ask which the person prefers for each.
+- Children's names are optional; empty names become "Child 1", "Child 2", ...
 - Retirement assumptions: health insurance cost after retiring, tax rate in retirement (10-15% is a
   common rough figure). Keep the default return / inflation unless they have a view.
 
@@ -88,7 +96,10 @@ graduation month if they know it.
 
 1. Start from the starter categories. Ask whether to add or rename any (e.g. Coffee, Pets,
    Childcare). Mark transfers, card payments, paychecks and savings/529 transfers as
-   `kind: ignore`; irregular big costs (property tax, a one-off purchase) as `kind: one_time`;
+   `kind: ignore`; yearly bills (income or property tax, a yearly insurance premium) as
+   `kind: annual`; big one-off purchases (furniture) as `kind: one_time`; unplanned costs that
+   should come out of the emergency fund (car or home repairs, vet emergencies) as
+   `kind: emergency`;
    money coming in that offsets spending (reimbursements, refunds) as `kind: credit`.
 2. Run `financial_plan categorize . --unmatched` to see what no rule catches.
 3. Propose rules in small batches, grouped by merchant: prefer `contains` on a distinctive word,
