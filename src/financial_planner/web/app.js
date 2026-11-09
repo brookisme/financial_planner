@@ -4383,7 +4383,6 @@
     <td><input type="number" data-k="retired_pct" value="${esc(c.retired_pct ?? 0)}" style="width:64px"></td>
     <td style="text-align:center"><input type="checkbox" data-k="default_on"${c.default_on ? " checked" : ""}></td>
     <td style="text-align:center"><input type="checkbox" data-k="in_retirement"${c.in_retirement ? " checked" : ""}></td>
-    <td style="text-align:center"><input type="checkbox" data-k="tax"${c.tax ? " checked" : ""}></td>
     <td><input data-k="offsets" value="${esc(c.offsets ?? "")}" list="cat-names" style="width:130px"></td>
     <td><input data-k="label" value="${esc(c.label ?? "")}" style="width:160px"></td>
     <td><input data-k="note" value="${esc(c.note ?? "")}" style="width:140px"></td>
@@ -4391,17 +4390,16 @@
       <button class="btn sm danger" type="button" data-del>Remove</button></td></tr>`;
     el.innerHTML = `<div class="panel" style="display:grid;gap:10px">
       <div class="sec-head"><h3>Categories</h3><span class="small muted">Saved in ${esc(fileOf("categories"))}. Renaming a category also updates the rules that use it.</span></div>
-      <p class="small muted"><b>Kind:</b> regular spending is averaged in Spending and Budgeting. Annual
-        expenses (taxes, insurance), 1-time purchases and emergency fund costs each get an on/off
-        toggle in their own planner box; emergency fund costs are paid from the emergency fund.
-        Credits (money in) can be subtracted; ignore is for transfers, card payments and
-        paychecks. <b>Kids gone / retired</b> are % changes used by Spending over time. <b>On by
-        default</b> and <b>in retirement</b> apply to those costs and to credits; <b>tax</b> puts
-        an annual expense or purchase in the tax set-aside. <b>Offsets</b>: for a credit, the
-        category it reduces.</p>
+      <p class="small muted"><b>Kind:</b> regular spending is averaged in Spending and Budgeting.
+        Annual expenses (taxes, insurance), 1-time purchases and emergency fund costs are kept out
+        of the averages; annual ones start each budget's annual expenses list. Credits (money in)
+        can be subtracted; ignore is for transfers, card payments and paychecks. <b>Kids gone /
+        retired</b> are % changes used by Spending over time. <b>On by default</b>, <b>in
+        retirement</b>, <b>offsets</b> (the category a credit reduces), the label and the note
+        apply to credits.</p>
       <div class="ptable-scroll"><table class="dtable edit" id="cat-table"><thead><tr>
         <th>Name</th><th>Kind</th><th>Group</th><th>Flexible</th><th>Kids gone %</th><th>Retired %</th>
-        <th>On by default</th><th>In retirement</th><th>Tax</th><th>Offsets</th><th>Toggle label</th>
+        <th>On by default</th><th>In retirement</th><th>Offsets</th><th>Label</th>
         <th>Note</th><th></th></tr></thead><tbody>${cats.map(row2).join("")}</tbody></table></div>
       ${catNamesDatalist()}
       <div class="btns"><button class="btn sm add" type="button" id="cat-add">+ Add category</button>
@@ -4430,7 +4428,7 @@
         const out = { name: f.name };
         if (f.kind !== "spending") out.kind = f.kind;
         if (f.group && f.group !== "Other") out.group = f.group;
-        ["flexible", "default_on", "in_retirement", "tax"].forEach((k) => {
+        ["flexible", "default_on", "in_retirement"].forEach((k) => {
           if (f[k]) out[k] = true;
         });
         ["kids_gone_pct", "retired_pct"].forEach((k) => {
