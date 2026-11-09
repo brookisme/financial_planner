@@ -78,7 +78,7 @@ export class Data {
   get primary(): Partner {
     return this.partners[0] ?? {id: 'none', name: 'You', age: 40, take_home_monthly: 0,
       take_home_note: '', raise_pct: 0, social_security: {at_67: 0, claim_age: null},
-      pensions: [], accounts: []};
+      retirement_age: null, pensions: [], accounts: []};
   }
 
   /** Credit categories that offset a given category. */
@@ -122,9 +122,11 @@ export function defaults(d: Data): Settings {
   d.children.forEach((c) => cs[c.id] = {school: c.school, cost: col.schools[c.school]?.cost ?? 0,
     ret: preset.return_pct, inf: preset.inflation_pct});
   const ra = p.assumptions.retirement;
-  const rs: RetireState = {age: ra.default_age, ret: ra.return_pct, inf: ra.inflation_pct,
-    wd: ra.withdrawal_pct, ss: true, raise: {}, ssAmt: {}, claim: {}, pen: {}, acct: {}, inv: {}};
-  d.partners.forEach((x) => {
+  const rs: RetireState = {age: d.partners[0]?.retirement_age ?? ra.default_age,
+    ret: ra.return_pct, inf: ra.inflation_pct, wd: ra.withdrawal_pct, ss: true, ages: {},
+    raise: {}, ssAmt: {}, claim: {}, pen: {}, acct: {}, inv: {}};
+  d.partners.forEach((x, i) => {
+    if (i > 0) rs.ages[x.id] = x.retirement_age ?? null;
     rs.raise[x.id] = x.raise_pct;
     rs.ssAmt[x.id] = x.social_security.at_67;
     rs.claim[x.id] = x.social_security.claim_age;
@@ -386,15 +388,18 @@ export interface IncomePart {
   partner: string;
   value: number;
   balance?: number;
+  yrs?: number;
   started: boolean;
   start?: number;
   claimAge?: number;
 }
 
-/** Retirement income for one retirement age. */
+/** Retirement income once everyone has retired, for one primary retirement age. */
 export interface RetireResult {
   age: number;
   yrs: number;
+  year: number;
+  years: Record<string, number>;
   parts: IncomePart[];
   total: number;
   later: number;
@@ -413,29 +418,57 @@ export function yearAtAge(d: Data, partner: Partner, age: number): number {
   return Math.round(d.todayYear - partner.age) + age;
 }
 
-/** First full calendar year of retirement. */
-export function retireYear(d: Data, rs: RetireState): number {
-  return Math.round(d.todayYear - d.primary.age) + 1 + rs.age;
+/**
+ * A partner's retirement age: the slider for the primary partner, their own age if set, otherwise
+ * the age they are when the primary partner retires (same year).
+ * @param d The data.
+ * @param rs Retirement settings.
+ * @param p The partner.
+ * @param a Primary partner's retirement age (defaults to the slider).
+ */
+export function partnerRetireAge(d: Data, rs: RetireState, p: Partner, a = rs.age): number {
+  if (p.id === d.primary.id) return a;
+  const own = rs.ages?.[p.id];
+  return own == null ? ageWhen(d, p, a) : own;
+}
+
+/** First full calendar year a partner is retired. */
+export function partnerRetireYear(d: Data, rs: RetireState, p: Partner, a = rs.age): number {
+  const own = p.id === d.primary.id ? null : rs.ages?.[p.id];
+  return own == null ? Math.round(d.todayYear - d.primary.age) + 1 + a :
+      Math.round(d.todayYear - p.age) + 1 + own;
+}
+
+/** First full calendar year everyone is retired (spending switches to retirement). */
+export function retireYear(d: Data, rs: RetireState, a = rs.age): number {
+  const first = Math.round(d.todayYear - d.primary.age) + 1 + a;
+  return Math.max(first, ...d.partners.map((p) => partnerRetireYear(d, rs, p, a)));
 }
 
 /**
- * Monthly retirement income (today's dollars, before tax) if the primary partner retires at a.
+ * Monthly retirement income (today's dollars, before tax) once everyone has retired, if the
+ * primary partner retires at a. Each partner's pensions and accounts follow their own retirement
+ * age.
  * @param d The data.
  * @param s Settings.
  * @param a Primary partner's retirement age.
  */
 export function retirementIncome(d: Data, s: Settings, a: number): RetireResult {
   const rs = s.rs;
-  const yrs = a - d.primary.age;
-  const months = Math.round(yrs * 12);
+  const year = retireYear(d, rs, a);
+  const yrs = Math.max(a - d.primary.age, ...d.partners.map((p) =>
+      partnerRetireAge(d, rs, p, a) - p.age));
   const r = rs.ret / 100;
-  const inf = Math.pow(1 + rs.inf / 100, yrs);
+  const real = (y: number) => Math.pow(1 + rs.inf / 100, y);
   const wd = rs.wd / 100 / 12;
   const parts: IncomePart[] = [];
   const ages: Record<string, number> = {};
+  const years: Record<string, number> = {};
   d.partners.forEach((p) => {
-    const ageR = ageWhen(d, p, a);
+    const ageR = partnerRetireAge(d, rs, p, a);
+    const pYrs = ageR - p.age;
     ages[p.id] = ageR;
+    years[p.id] = partnerRetireYear(d, rs, p, a);
     p.pensions.forEach((pn, i) => {
       const key = `${p.id}:${i}`;
       const st = rs.pen[key];
@@ -451,18 +484,18 @@ export function retirementIncome(d: Data, s: Settings, a: number): RetireResult 
       const key = `${p.id}:${i}`;
       const st = rs.acct[key];
       if (!st?.on) return;
-      const bal = fv(st.bal, st.monthly, months, r);
-      parts.push({kind: 'account', key, name: ac.name, partner: p.id, value: bal / inf * wd,
-        balance: bal, started: true});
+      const bal = fv(st.bal, st.monthly, Math.round(pYrs * 12), r);
+      parts.push({kind: 'account', key, name: ac.name, partner: p.id, value: bal / real(pYrs) * wd,
+        balance: bal, yrs: pYrs, started: true});
     });
   });
   d.p.investments.forEach((v) => {
     const st = rs.inv[v.id];
     if (!st) return;
-    const bal = fv(st.bal, s.st.sav[`inv:${v.id}`] ?? 0, months, st.ret / 100);
+    const bal = fv(st.bal, s.st.sav[`inv:${v.id}`] ?? 0, Math.round(yrs * 12), st.ret / 100);
     if (bal <= 0) return;
-    parts.push({kind: 'investment', key: v.id, name: v.name, partner: '', value: bal / inf * wd,
-      balance: bal, started: true});
+    parts.push({kind: 'investment', key: v.id, name: v.name, partner: '', value: bal / real(yrs) * wd,
+      balance: bal, yrs, started: true});
   });
   if (rs.ss) {
     d.partners.forEach((p) => {
@@ -471,15 +504,16 @@ export function retirementIncome(d: Data, s: Settings, a: number): RetireResult 
       const claimAge = want == null ? Math.max(62, ageR) : Math.min(70, Math.max(want, ageR));
       const value = (rs.ssAmt[p.id] ?? 0) * ssFactor(claimAge);
       if (!value) return;
+      const ageThen = ageR + year - years[p.id];
       parts.push({kind: 'ss', key: p.id, name: `${p.name} Social Security`, partner: p.id, value,
-        started: ageR >= claimAge - 0.01, claimAge,
+        started: ageThen >= claimAge - 0.01, claimAge,
         start: yearAtAge(d, p, Math.ceil(claimAge - 0.01))});
     });
   }
   const total = sum(parts.filter((x) => x.started).map((x) => x.value));
   const pending = parts.filter((x) => !x.started);
   const later = sum(pending.map((x) => x.value));
-  return {age: a, yrs, parts, total, later, full: total + later,
+  return {age: a, yrs, year, years, parts, total, later, full: total + later,
     fullYear: Math.max(0, ...pending.map((x) => x.start ?? 0)), ages};
 }
 
@@ -534,21 +568,20 @@ export function spendAt(d: Data, s: Settings, y: number): YearSpend {
 }
 
 /**
- * Take-home income per month in a calendar year: pay grows with real raises until retirement,
- * then retirement income after tax, with Social Security added from each claim year.
+ * Take-home income per month in a calendar year: each partner's pay grows with real raises until
+ * they retire, then their pensions and accounts pay out (after tax), with Social Security added
+ * from each claim year. Other income and investments switch over once everyone has retired.
  */
 export function incomeAt(d: Data, s: Settings, y: number): number {
   const {st, rs, fs} = s;
-  if (y < retireYear(d, rs)) {
-    const n = Math.max(0, y - d.todayYear);
-    return sum(d.partners.map((p) => (st.inc[p.id] ?? 0) *
-                                     Math.pow(1 + (rs.raise[p.id] ?? 0) / 100, n))) +
-        (st.inc.other ?? 0);
-  }
   const R = retirementIncome(d, s, rs.age);
-  const v = sum(R.parts.filter((x) => x.kind !== 'ss' || y >= (x.start ?? 0))
-      .map((x) => x.value));
-  return v * (1 - fs.tax / 100);
+  const n = Math.max(0, y - d.todayYear);
+  const pay = sum(d.partners.filter((p) => y < R.years[p.id]).map((p) =>
+      (st.inc[p.id] ?? 0) * Math.pow(1 + (rs.raise[p.id] ?? 0) / 100, n))) +
+      (y < R.year ? st.inc.other ?? 0 : 0);
+  const paid = sum(R.parts.filter((x) => x.kind === 'investment' ? y >= R.year :
+      y >= R.years[x.partner] && (x.kind !== 'ss' || y >= (x.start ?? 0))).map((x) => x.value));
+  return pay + paid * (1 - fs.tax / 100);
 }
 
 /** Inflation multiplier for showing a year in future dollars (1 in today's dollars). */
@@ -594,9 +627,10 @@ export function results(d: Data, s: Settings): ResultRow[] {
     rows.push([`${c.name}: share of college covered`, Math.round(x.pct * 100), 1, 'pct']);
     rows.push([`${c.name}: surplus / shortfall, today's $`, x.today, 1]);
   });
-  rows.push(['Retirement', null],
-            [`Retirement age (${d.primary.name})`, s.rs.age, 0, 'age'],
-            ['First full year retired', ry, 0, 'year'],
+  rows.push(['Retirement', null]);
+  d.partners.forEach((p) => rows.push([d.partners.length > 1 ?
+      `Retirement age (${p.name})` : 'Retirement age', R.ages[p.id], 0, 'age']));
+  rows.push(['First full year retired', ry, 0, 'year'],
             ['Income after tax, at retirement', R.total * net, 1],
             ['Income after tax, once all Social Security starts', R.full * net, 1],
             ['Projected spending in retirement', spR, -1],
@@ -669,6 +703,7 @@ export function settingLabel(d: Data, path: string[]): string {
       inf: 'Inflation', wd: 'Yearly withdrawal', ss: 'Social Security'};
     if (simple[k]) return simple[k];
     if (k === 'raise') return `${who(sub)} yearly raise`;
+    if (k === 'ages') return `${who(sub)} retirement age`;
     if (k === 'ssAmt') return `${who(sub)} Social Security at 67`;
     if (k === 'claim') return `${who(sub)} claims Social Security at`;
     if (k === 'pen') {
@@ -696,7 +731,7 @@ export function settingLabel(d: Data, path: string[]): string {
 /** A readable value for a settings path. */
 export function settingVal(d: Data, path: string[], v: unknown): string {
   if (v === undefined) return '–';
-  if (v === null) return 'at retirement';
+  if (v === null) return path[1] === 'ages' ? `same year as ${d.primary.name}` : 'at retirement';
   if (typeof v === 'boolean') return v ? 'On' : 'Off';
   if (path[0] === 'cs' && path[2] === 'school') {
     return d.p.assumptions.college.schools[String(v)]?.name ?? String(v);
@@ -704,7 +739,7 @@ export function settingVal(d: Data, path: string[], v: unknown): string {
   if (typeof v !== 'number') return String(v);
   if (path[0] === 'fs' && (path[1] === 'kg' || path[1] === 'rt')) return `${v > 0 ? '+' : ''}${v}%`;
   if (isPct(path)) return `${v}%`;
-  if (['age', 'claim'].includes(path[1])) return String(v);
+  if (['age', 'ages', 'claim'].includes(path[1])) return String(v);
   return `${d.p.plan.currency_symbol}${Math.round(v).toLocaleString('en-US')}`;
 }
 
