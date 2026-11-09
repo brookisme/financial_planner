@@ -499,6 +499,7 @@ export interface IncomePart {
   partner: string;
   value: number;
   balance?: number;
+  invested?: number;
   yrs?: number;
   started: boolean;
   start?: number;
@@ -566,7 +567,8 @@ export function retireYear(d: Data, rs: RetireState, a = rs.age): number {
  */
 export function retirementIncome(d: Data, s: Settings, a: number): RetireResult {
   const base = baseRetirement(d, s, a);
-  const inv = investmentParts(d, s, base.yrs, simulate(d, s, a).at);
+  const sim = simulate(d, s, a);
+  const inv = investmentParts(d, s, base.yrs, sim.at, sim.paid);
   const parts = [...base.parts.filter((x) => x.kind !== 'ss'), ...inv,
     ...base.parts.filter((x) => x.kind === 'ss')];
   const total = sum(parts.filter((x) => x.started).map((x) => x.value));
@@ -574,6 +576,21 @@ export function retirementIncome(d: Data, s: Settings, a: number): RetireResult 
   const later = sum(pending.map((x) => x.value));
   return {...base, parts, total, later, full: total + later,
     fullYear: Math.max(0, ...pending.map((x) => x.start ?? 0))};
+}
+
+/**
+ * What the retirement accounts, investments and savings account add up to when the last partner
+ * retires: the money put in (balances today plus every contribution) and the estimated total
+ * with returns, in dollars of that year and in today's dollars.
+ */
+export function retirementSavings(d: Data, s: Settings, a = s.rs.age):
+    {invested: number; total: number; today: number; year: number} {
+  const R = retirementIncome(d, s, a);
+  const parts = R.parts.filter((x) => x.balance !== undefined);
+  const total = sum(parts.map((x) => x.balance!));
+  return {invested: sum(parts.map((x) => x.invested ?? 0)), total,
+    today: sum(parts.map((x) => x.balance! / Math.pow(1 + s.rs.inf / 100, x.yrs ?? R.yrs))),
+    year: R.year};
 }
 
 /** One year of the long-range projection (monthly amounts, today's dollars). */
@@ -635,6 +652,7 @@ export interface SimYear {
 export interface Sim {
   years: Map<number, SimYear>;
   at: Record<string, number>;
+  paid: Record<string, number>;
   full: Record<string, number|null>;
 }
 
@@ -704,8 +722,13 @@ export function simulate(d: Data, s: Settings, a = s.rs.age): Sim {
     }
     return f;
   };
+  const put: Record<string, number> = Object.fromEntries(accts.map((x) => [x.key, x.bal]));
+  const paid: Record<string, number> = {};
   const snapshot = (prefix: string) => {
-    accts.filter((x) => x.key.startsWith(prefix) && !(x.key in at)).forEach((x) => at[x.key] = x.bal);
+    accts.filter((x) => x.key.startsWith(prefix) && !(x.key in at)).forEach((x) => {
+      at[x.key] = x.bal;
+      paid[x.key] = put[x.key];
+    });
     return at;
   };
   for (let m = 0; m < n; m++) {
@@ -739,12 +762,14 @@ export function simulate(d: Data, s: Settings, a = s.rs.age): Sim {
         const target = x.to ? byKey.get(x.to) : undefined;
         if (spill > 0 && target) {
           target.bal += spill;
+          put[target.key] += spill;
           overflow += spill;
         } else {
           kept += spill;
         }
       }
       x.bal += v;
+      put[x.key] += v;
       if (x.cap != null && full[x.key] == null && x.bal >= x.cap - 0.5) full[x.key] = y;
     });
     let yr = years.get(y);
@@ -764,6 +789,7 @@ export function simulate(d: Data, s: Settings, a = s.rs.age): Sim {
   }
   accts.forEach((x) => {
     if (!(x.key in at)) at[x.key] = x.bal;
+    if (!(x.key in paid)) paid[x.key] = put[x.key];
   });
   years.forEach((yr) => {
     const k = yr.months;
@@ -774,7 +800,7 @@ export function simulate(d: Data, s: Settings, a = s.rs.age): Sim {
     yr.short /= k;
     yr.left /= k;
   });
-  const sim = {years, at, full};
+  const sim = {years, at, paid, full};
   if (memo.size > 200) memo.clear();
   memo.set(key, sim);
   return sim;
@@ -1072,7 +1098,8 @@ function baseRetirement(d: Data, s: Settings, a: number):
       const bal = fv(st.bal, st.monthly, Math.round(pYrs * 12), r);
       const w = drawPct(rs, `acct:${key}`) / 100 / 12;
       parts.push({kind: 'account', key, name: ac.name, partner: p.id, value: bal / real(pYrs) * w,
-        balance: bal, yrs: pYrs, started: true});
+        balance: bal, invested: st.bal + st.monthly * Math.round(pYrs * 12), yrs: pYrs,
+        started: true});
     });
   });
   if (rs.ss) {
@@ -1095,8 +1122,8 @@ function baseRetirement(d: Data, s: Settings, a: number):
  * Investment and savings-account income from balances at retirement (keys inv:<id>, sav:<id>),
  * each at its own withdrawal rate.
  */
-function investmentParts(d: Data, s: Settings, yrs: number, bals: Record<string, number>):
-    IncomePart[] {
+function investmentParts(d: Data, s: Settings, yrs: number, bals: Record<string, number>,
+                         paid: Record<string, number> = {}): IncomePart[] {
   const real = Math.pow(1 + s.rs.inf / 100, yrs);
   const out: IncomePart[] = [];
   const add = (kind: 'investment'|'savings', id: string, name: string) => {
@@ -1104,7 +1131,7 @@ function investmentParts(d: Data, s: Settings, yrs: number, bals: Record<string,
     const bal = bals[key] ?? 0;
     if (bal <= 0) return;
     out.push({kind, key: id, name, partner: '', value: bal / real * drawPct(s.rs, key) / 100 / 12,
-      balance: bal, yrs, started: true});
+      balance: bal, invested: paid[key], yrs, started: true});
   };
   d.p.investments.forEach((v) => {
     if (s.rs.inv[v.id]) add('investment', v.id, v.name);
