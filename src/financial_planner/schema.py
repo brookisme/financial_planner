@@ -152,12 +152,15 @@ class Partner(_Model):
 class Contribution(_Model):
     """How much goes into a 529, savings account or investment each month.
 
-    Either a fixed amount (``monthly``) or a share of what is left over each month after spending,
-    taxes and every fixed contribution (``left_pct``), optionally kept between a floor and a cap.
+    A fixed amount (``monthly``), a share of what is left over each month after spending, annual
+    expenses and every fixed contribution (``left_pct``, optionally kept between a floor and a
+    cap), or ``rest``: whatever is still left after the fixed and percent contributions, split
+    evenly between every contribution marked ``rest``.
 
     Attributes:
-        monthly: Fixed amount per month (used when ``left_pct`` is empty).
+        monthly: Fixed amount per month (used when neither ``left_pct`` nor ``rest`` is set).
         left_pct: Percent of the monthly left-over to put in instead of a fixed amount.
+        rest: Put in an even share of whatever is left after everything else.
         min_monthly: With ``left_pct``: put in at least this much (even when nothing is left).
         max_monthly: With ``left_pct``: put in at most this much.
     """
@@ -165,10 +168,13 @@ class Contribution(_Model):
     left_pct: Optional[float] = Field(None, ge=0, le=100)
     min_monthly: Optional[float] = Field(None, ge=0)
     max_monthly: Optional[float] = Field(None, ge=0)
+    rest: bool = False
 
     @model_validator(mode='after')
     def _check_range(self) -> 'Contribution':
-        """Require min_monthly <= max_monthly."""
+        """Require min_monthly <= max_monthly, and only one of left_pct / rest."""
+        if self.rest and self.left_pct is not None:
+            raise ValueError('use either left_pct or rest, not both')
         lo, hi = self.min_monthly, self.max_monthly
         if lo is not None and hi is not None and lo > hi:
             raise ValueError('min_monthly must not be more than max_monthly')
