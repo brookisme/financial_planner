@@ -44,6 +44,18 @@ nav.tabs a:hover,nav.tabs a:focus-visible{color:var(--ink);border-color:var(--in
 .strip .v{font-family:var(--f-mono);font-size:22px;font-variant-numeric:tabular-nums;white-space:nowrap}
 .strip .op{color:var(--ink3);font-family:var(--f-mono)}
 .strip .result{background:var(--accent-soft)}
+.strips{display:grid;gap:6px}
+.strip-head{display:flex;gap:10px;align-items:center;justify-content:space-between;margin-top:6px}
+.strip-head .eyebrow{color:var(--ink)}
+.strip.with-vs{grid-template-columns:repeat(5,minmax(0,1fr)) minmax(0,1.15fr)}
+.strip.plan{border-style:dashed;background:transparent}
+.strip.plan .v{color:var(--ink2)}
+.strip .vs{background:var(--bg)}
+.strip .vs.over{background:color-mix(in srgb,var(--neg) 18%,var(--panel))}
+.strip .vs.under{background:color-mix(in srgb,var(--pos) 18%,var(--panel))}
+.strip .vs .cmp-sel{max-width:100%}
+.strip-add{display:flex;justify-content:flex-start}
+@media (max-width:760px){.strip.with-vs{grid-template-columns:1fr 1fr}.strip .vs{grid-column:1/-1}}
 .pos{color:var(--pos)} .neg{color:var(--neg)}
 @media (max-width:760px){.strip{grid-template-columns:1fr 1fr}.strip>div{border-left:0;border-top:1px solid var(--rule)}.strip>div:nth-child(-n+2){border-top:0}.strip .result{grid-column:1/-1}}
 
@@ -96,12 +108,40 @@ button.btn.primary,a.btn.primary{background:var(--ink);color:var(--bg);border-co
 .chart .hit{fill:transparent;cursor:pointer}
 .chart .hit:hover+g rect,.chart g.m:hover rect{opacity:.85}
 .chart .month-on{fill:var(--ink)}
+.chart .whisk{stroke:var(--ink);stroke-width:1.5;opacity:.7;pointer-events:none}
+.chart .brush{fill:var(--accent);fill-opacity:.14;stroke:var(--accent);stroke-width:1.5;pointer-events:none}
+#mchart{user-select:none;-webkit-user-select:none}
+.chart.pan{cursor:grab;touch-action:pan-y}
+.chart.pan:active{cursor:grabbing}
+.chart.brushable{cursor:crosshair;touch-action:pan-y}
+.chart-tools{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}
+.ptools{display:inline-flex;gap:6px}
+.seg button:disabled{opacity:.45;cursor:not-allowed}
 .legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px;color:var(--ink2)}
 .legend span{display:inline-flex;align-items:center;gap:6px}
 .sw{width:12px;height:12px;border-radius:3px;display:inline-block}
 .ln{width:22px;height:0;border-top:2px dashed var(--avg);display:inline-block}
 .ln.save{border-top:3px dotted var(--save)}
 .detail{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px}
+hr.divider{border:0;border-top:1px solid var(--rule);margin:6px 0}
+.part-break{border-top:2px solid var(--ink);margin:12px 0 0}
+.ptable.act tr.sel td{background:var(--accent-soft)}
+.ptable tr.off td{color:var(--ink3)}
+.ptable .tg{display:inline-flex;align-items:center;gap:6px}
+.ptable tbody.psum tr:first-child td{border-top:2px solid var(--rule);padding-top:12px}
+.ptable tbody.psum td{color:var(--ink2)}
+.ptable tbody.psum tr.total td{color:var(--ink)}
+.cmp-sel{font:inherit;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--ink2);background:var(--bg);border:1px solid var(--rule);border-radius:6px;padding:2px 4px;max-width:150px}
+.an-rows{display:grid;gap:8px;margin-bottom:8px}
+.presets .chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.pr-edit{display:grid;gap:8px}
+.pr-row{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;font-size:13px;color:var(--ink2)}
+.pr-row input[type=text]{font:inherit;font-size:14px;padding:4px 6px;border:1px solid var(--rule);border-radius:6px;background:var(--bg);color:var(--ink);flex:1 1 120px;min-width:0}
+.pr-row input.amt{width:64px}
+.an-row{display:grid;grid-template-columns:minmax(0,1fr) 110px auto;gap:6px;align-items:center}
+.an-row input{font:inherit;font-size:14px;padding:4px 6px;border:1px solid var(--rule);border-radius:6px;background:var(--bg);color:var(--ink);min-width:0}
+.an-row input.amt{width:100%}
+.an-total{border-top:1px solid var(--rule);padding-top:8px;margin-top:8px;font-weight:600}
 @media (max-width:860px){.detail{grid-template-columns:1fr}}
 .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
 @media (max-width:520px){.kpis{grid-template-columns:1fr 1fr}}
