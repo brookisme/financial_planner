@@ -57,6 +57,7 @@ try{var t=localStorage.getItem('fp-theme');if(t==='light'||t==='dark'){document.
           <tbody id="actbody"></tbody>
         </table></div>
       </div>
+      <div class="stack">
       <div class="panel" id="tx-panel" style="display:grid;gap:10px;align-content:start">
         <div class="sec-head"><h3>Transactions</h3><span style="display:inline-flex;gap:10px;align-items:center"><span class="small muted" id="tx-count"></span><button class="btn toggle sm" id="recat" type="button" aria-expanded="false">Recategorize</button></span></div>
         <p class="recat-note" id="recat-note" hidden>Click a transaction to change its category or make a rule from it. Click <i>Recategorize</i> again when you're done.</p>
@@ -66,8 +67,8 @@ try{var t=localStorage.getItem('fp-theme');if(t==='light'||t==='dark'){document.
           <select id="sort" aria-label="Sort"><option value="amt">Largest first</option><option value="date">Newest first</option></select>
         </div>
         <div class="scroller"><table class="list" id="txlist"></table></div>
-        <hr class="divider">
-        <div><h3 style="margin-bottom:6px">Top merchants</h3><table class="list" id="merchants"></table></div>
+      </div>
+      <div class="panel"><h3 style="margin-bottom:6px">Top merchants</h3><table class="list" id="merchants"></table></div>
       </div>
     </div>
   </section>
@@ -80,7 +81,7 @@ try{var t=localStorage.getItem('fp-theme');if(t==='light'||t==='dark'){document.
       <span class="small muted" id="planner-sub">Plan each month and save it as a budget.</span>
     </div>
     <div class="panel sbar" id="budgets" aria-label="Budgets">
-      <div class="sb-row"><span class="eyebrow">Budgets</span><div class="chips" id="bg-tabs" role="group" aria-label="Saved budgets"></div></div>
+      <div class="sb-row"><span class="eyebrow">Budgets</span><div class="chips" id="bg-tabs" data-bg-tabs role="group" aria-label="Saved budgets"></div></div>
       <div class="sb-row">
         <input type="text" id="bg-name" class="sb-name" placeholder="Name this budget, e.g. Less dining out" aria-label="Budget name" maxlength="60">
         <button class="btn primary" id="bg-save" type="button">Save as new</button>
@@ -88,7 +89,7 @@ try{var t=localStorage.getItem('fp-theme');if(t==='light'||t==='dark'){document.
         <button class="btn" id="bg-del" type="button" hidden>Delete</button>
         <button class="btn" id="bg-reset" type="button">Start from averages</button>
       </div>
-      <p class="small muted" id="bg-state" aria-live="polite"></p>
+      <p class="small muted" id="bg-state" data-bg-state aria-live="polite"></p>
     </div>
     <div class="planner">
       <div class="panel ptable-scroll">
@@ -114,6 +115,7 @@ try{var t=localStorage.getItem('fp-theme');if(t==='light'||t==='dark'){document.
       <h2>College 529s</h2>
       <span class="small muted">Rough projections. Full cost of attendance for the whole degree, no financial aid.</span>
     </div>
+    <div class="panel sbar bg-mirror" aria-label="Budget"><div class="sb-row"><span class="eyebrow">Budget</span><div class="chips" data-bg-tabs role="group" aria-label="Saved budgets"></div></div><p class="small muted" data-bg-state aria-live="polite"></p></div>
     <div class="kids" id="kids"></div>
     <p class="note">Contributions stop at high school graduation. The comparison uses the balance on graduation day, so it ignores growth while the money is spent down. "Today's dollars" converts the gap back at the college-cost inflation rate you pick.</p>
   </section>
@@ -123,6 +125,7 @@ try{var t=localStorage.getItem('fp-theme');if(t==='light'||t==='dark'){document.
       <h2>Retirement</h2>
       <span class="small muted" id="retire-sub">Monthly income at each retirement age, in today's dollars.</span>
     </div>
+    <div class="panel sbar bg-mirror" aria-label="Budget"><div class="sb-row"><span class="eyebrow">Budget</span><div class="chips" data-bg-tabs role="group" aria-label="Saved budgets"></div></div><p class="small muted" data-bg-state aria-live="polite"></p></div>
     <div class="retire">
       <div class="panel" style="display:grid;gap:16px">
         <div class="ctl">
@@ -131,6 +134,7 @@ try{var t=localStorage.getItem('fp-theme');if(t==='light'||t==='dark'){document.
           <input type="range" id="ra" min="50" max="75" step="1" aria-label="Retirement age">
         </div>
         <div id="ra-others" style="display:grid;gap:12px" hidden></div>
+        <div class="r-totals" id="r-totals"></div>
         <div class="parts" id="r-parts"></div>
         <div style="display:grid;gap:8px">
           <div class="legend" id="r-legend"></div>
@@ -139,8 +143,8 @@ try{var t=localStorage.getItem('fp-theme');if(t==='light'||t==='dark'){document.
         </div>
         <div class="ptable-scroll"><table class="rtable" id="rtable"></table></div>
       </div>
-      <div class="side">
-        <div id="r-panels" style="display:grid;gap:14px"></div>
+      <div class="side" id="r-side">
+        <div class="fold-all"><button class="btn sm" type="button" id="r-fold-all">Collapse all</button></div>
         <div class="panel">
           <h3>Assumptions</h3>
           <div id="r-raises" style="display:grid;gap:10px"></div>
@@ -154,6 +158,7 @@ try{var t=localStorage.getItem('fp-theme');if(t==='light'||t==='dark'){document.
           <div class="ctl"><label for="r-wd">Default yearly withdrawal <span class="small muted">for accounts without their own</span></label><span class="num" id="r-wd-v"></span><input type="range" id="r-wd" min="3" max="6" step="0.25"></div>
           <button class="btn" id="r-reset" type="button">Reset retirement inputs</button>
         </div>
+        <div id="r-panels" style="display:grid;gap:14px"></div>
       </div>
     </div>
     <p class="note">Account balances are grown at the return rate, converted to today's dollars at the inflation rate, then turned into monthly income with the withdrawal rate (4% a year is a common rule of thumb). Pension estimates are treated as today's dollars. Income is compared with projected retirement spending from Spending over time below.</p>
