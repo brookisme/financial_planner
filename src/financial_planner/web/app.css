@@ -122,14 +122,21 @@ button.btn.primary,a.btn.primary{background:var(--ink);color:var(--bg);border-co
 .sw{width:12px;height:12px;border-radius:3px;display:inline-block}
 .ln{width:22px;height:0;border-top:2px dashed var(--avg);display:inline-block}
 .ln.save{border-top:3px dotted var(--save)}
+.ln.bud{border-top:2px dashed var(--ink)}
+.chart .budline{stroke:var(--ink);stroke-width:2;stroke-dasharray:2 4;stroke-linecap:round}
+.attach{display:inline-flex;gap:8px;align-items:center;margin-left:auto;flex-wrap:wrap}
+.attach-vs{font-size:13px;font-weight:600;padding:3px 8px;border-radius:6px}
+.attach-vs:empty{display:none}
+.attach-vs.over{background:color-mix(in srgb,var(--neg) 20%,var(--panel));color:var(--neg)}
+.attach-vs.under{background:color-mix(in srgb,var(--pos) 20%,var(--panel));color:var(--pos)}
 .detail{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px}
 .stack{display:grid;gap:18px;align-content:start;min-width:0}
-.fold-all{display:flex;justify-content:flex-end}
+.fold-all{margin-left:auto}
 .panel.foldable{position:relative}
 .panel.foldable>.fold{position:absolute;top:8px;right:8px;font:inherit;font-size:14px;line-height:1;width:28px;height:28px;border:1px solid var(--rule);border-radius:6px;background:var(--bg);color:var(--ink2);cursor:pointer}
 .panel.foldable>.fold:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .panel.foldable>:nth-child(2){padding-right:34px}
-.panel.folded>:not(.fold):not(:nth-child(2)){display:none}
+.panel.folded>:not(.fold):not(:nth-child(2)){display:none !important}
 .r-totals{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--rule);border-radius:10px;overflow:hidden}
 .r-totals>div{display:grid;gap:2px;padding:10px 14px;min-width:0}
 .r-totals>div+div{border-left:1px solid var(--rule);background:var(--accent-soft)}
