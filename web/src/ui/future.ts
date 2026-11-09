@@ -147,7 +147,7 @@ function drawFuture(): void {
         .join(', ');
     const tip = `<b>${r.y}</b> · ${esc(ages)}<br>${r.s.kids} of ${d.children.length} children at home${
         r.s.ret ? ' · retired' : ''}<br>Living ${fmt(r.s.living * k)}` +
-        (r.s.tax ? `<br>Taxes set aside ${fmt(r.s.tax * k)}` : '') +
+        (r.s.annual ? `<br>Annual expenses ${fmt(r.s.annual * k)}` : '') +
         (r.s.health ? `<br>Health insurance ${fmt(r.s.health * k)}` : '') +
         (r.s.emergency ? `<br>Emergency costs ${fmt(r.s.emergency * k)} (from the fund)` : '') +
         (r.s.short ? `<br>Emergency costs the fund can't cover ${fmt(r.s.short * k)}` : '') +
@@ -184,7 +184,7 @@ function drawFuture(): void {
   if (ssDone > RY) stages.push([ssDone, 'All Social Security started']);
   stages.sort((a, b) => a[0] - b[0]);
   const dl = S.fs.nominal ? ' (with inflation)' : " (today's $)";
-  $('f-phases').innerHTML = `<tr><th>Stage</th><th>Year</th><th>Ages</th><th>Living costs</th><th>Taxes</th><th>Health ins.</th><th>Savings</th><th>Total out</th><th>Income${
+  $('f-phases').innerHTML = `<tr><th>Stage</th><th>Year</th><th>Ages</th><th>Living costs</th><th>Annual expenses</th><th>Health ins.</th><th>Savings</th><th>Total out</th><th>Income${
       dl}</th><th>Left over</th></tr>` + stages.map(([yr, lbl]) => {
     const s = spendAt(d, S, yr);
     const k = deflator(d, S, yr);
@@ -193,7 +193,7 @@ function drawFuture(): void {
     const df = inc - out;
     return `<tr><td>${esc(lbl)}</td><td>${yr}</td><td>${d.partners.map((p) =>
         Math.floor(p.age + yr - d.todayYear)).join(' / ')}</td><td>${fmt(s.living * k)}</td><td>${
-        fmt(s.tax * k)}</td><td>${fmt(s.health * k)}</td><td>${fmt(s.savings * k)}</td><td>${
+        fmt(s.annual * k)}</td><td>${fmt(s.health * k)}</td><td>${fmt(s.savings * k)}</td><td>${
         fmt(out)}</td><td>${fmt(inc)}</td><td class="${df >= 0 ? 'pos' : 'neg'}">${
         df >= 0 ? '+' : ''}${fmt(df)}</td></tr>`;
   }).join('');
