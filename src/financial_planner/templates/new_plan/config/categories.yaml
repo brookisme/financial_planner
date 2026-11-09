@@ -1,5 +1,7 @@
-# kind: spending (regular, averaged) | one_time (kept out of averages, optional toggle)
-#       credit (money in that can offset spending) | ignore (transfers, payments, paychecks)
+# kind: spending (regular, averaged) | annual (yearly expenses: taxes, insurance)
+#       | one_time (1-time purchases) | emergency (paid from the emergency fund)
+#       | credit (money in that can offset spending) | ignore (transfers, payments, paychecks)
+# annual, one_time and emergency are kept out of the averages; each gets a toggle in the planner.
 # kids_gone_pct / retired_pct: how the category changes once the kids leave / after retiring.
 
 categories:
@@ -18,12 +20,12 @@ categories:
   - {name: Subscriptions & Phone, group: Flexible, flexible: true}
   - {name: Other, group: Unsorted}
   - name: Income tax
-    kind: one_time
+    kind: annual
     tax: true
     default_on: true
     label: Set aside for income tax
   - name: Property tax
-    kind: one_time
+    kind: annual
     tax: true
     in_retirement: true
     label: Set aside for property tax
