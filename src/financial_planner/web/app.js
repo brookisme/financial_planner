@@ -52,9 +52,9 @@
     return String(s ?? "").replace(/[&<>"]/g, (ch) => ESCAPES[ch]);
   }
   function niceStep(max) {
-    const raw = max / 5;
-    const p = Math.pow(10, Math.floor(Math.log10(raw || 1)));
-    const n = raw / p;
+    const raw2 = max / 5;
+    const p = Math.pow(10, Math.floor(Math.log10(raw2 || 1)));
+    const n = raw2 / p;
     return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * p;
   }
   function sum(a) {
@@ -152,13 +152,20 @@
   };
   function defaults(d) {
     const p = d.p;
-    const st = { inc: {}, sav: {}, on: {}, plan: {} };
+    const st = {
+      inc: {},
+      sav: {},
+      on: {},
+      plan: {},
+      annual: d.annual.map((i) => ({ name: d.cats[i].name, amt: Math.round(d.avg(i) * 12) })),
+      emerg: null
+    };
     d.partners.forEach((x) => st.inc[x.id] = x.take_home_monthly);
     st.inc.other = p.other_income_monthly;
     d.children.forEach((c) => st.sav[`529:${c.id}`] = savLine(c.college_529));
     p.savings.forEach((s) => st.sav[`sav:${s.id}`] = savLine(s));
     p.investments.forEach((v) => st.sav[`inv:${v.id}`] = savLine(v));
-    [...d.costs, ...d.credits].forEach((i) => st.on[d.cats[i].name] = d.cats[i].default_on);
+    d.credits.forEach((i) => st.on[d.cats[i].name] = d.cats[i].default_on);
     d.regular.forEach((i) => st.plan[d.cats[i].name] = d.avg(i));
     d.credits.filter((i) => d.isPlannerCredit(i)).forEach((i) => st.plan[d.cats[i].name] = d.credAvg(i));
     const col = p.assumptions.college;
@@ -183,7 +190,8 @@
       claim: {},
       pen: {},
       acct: {},
-      inv: {}
+      inv: {},
+      draw: {}
     };
     d.partners.forEach((x, i) => {
       if (i > 0) rs.ages[x.id] = x.retirement_age ?? null;
@@ -195,13 +203,16 @@
         est: { ...pn.estimates },
         monthly: pn.monthly
       });
-      x.accounts.forEach((a, i2) => rs.acct[`${x.id}:${i2}`] = {
-        on: true,
-        bal: a.balance,
-        monthly: a.monthly
+      x.accounts.forEach((a, i2) => {
+        rs.acct[`${x.id}:${i2}`] = { on: true, bal: a.balance, monthly: a.monthly };
+        rs.draw[`acct:${x.id}:${i2}`] = null;
       });
     });
-    p.investments.forEach((v) => rs.inv[v.id] = { bal: v.balance, ret: v.return_pct });
+    p.investments.forEach((v) => {
+      rs.inv[v.id] = { bal: v.balance, ret: v.return_pct };
+      rs.draw[`inv:${v.id}`] = null;
+    });
+    retireSavings(d).forEach((s) => rs.draw[`sav:${s.id}`] = null);
     const fs = {
       kg: {},
       rt: {},
@@ -228,6 +239,14 @@
       setPath(out, JSON.parse(key), value);
     }
     return out;
+  }
+  function rebaseBudget(defs, saved2, base) {
+    const wrap = (st) => ({ st });
+    return rebase(wrap(defs), wrap(saved2), base ? wrap(base) : null).st;
+  }
+  function diffBudget(d, a, b) {
+    const wrap = (st) => ({ st });
+    return diffSettings(d, wrap(a), wrap(b));
   }
   function clone(o) {
     return JSON.parse(JSON.stringify(o));
@@ -262,7 +281,7 @@
     let s = `Built from ${list(used)} (${p.tx.length.toLocaleString("en-US")} transactions, ${months[0]} \u2013 ${months[months.length - 1]}).`;
     const notes = p.household.partners.filter((x) => x.take_home_note).map((x) => `${x.name} (${x.take_home_note})`);
     if (notes.length) s += ` Take-home pay: ${notes.join(", ")}.`;
-    return `${s} Change any number in the planner to see what it does to the month.`;
+    return `${s} Change any number in Budgeting to see what it does to the month.`;
   }
   function regularMo(d, st) {
     return sum(d.regular.map((i) => st.plan[d.cats[i].name] ?? 0));
@@ -270,28 +289,18 @@
   function creditsMo(d, st, ret = false) {
     return sum(d.credits.filter((i) => d.isPlannerCredit(i) && st.on[d.cats[i].name] && (!ret || d.cats[i].in_retirement)).map((i) => st.plan[d.cats[i].name] ?? 0));
   }
-  function oneTimeNet(d, st, i) {
-    const off = d.offsetsOf(d.cats[i].name).filter((c) => st.on[d.cats[c].name]);
-    return d.avg(i) - sum(off.map((c) => d.credAvg(c)));
+  function annualMo(st) {
+    return sum((st.annual ?? []).map((a) => a.amt)) / 12;
   }
-  function costMo(d, st, list, ret) {
-    return sum(list.filter((i) => st.on[d.cats[i].name] && (!ret || d.cats[i].in_retirement)).map((i) => oneTimeNet(d, st, i)));
-  }
-  function taxMo(d, st, ret = false) {
-    return costMo(d, st, [...d.annual, ...d.oneTime].filter((i) => d.cats[i].tax), ret);
-  }
-  function extraMo(d, st, ret = false) {
-    return costMo(d, st, [...d.annual, ...d.oneTime].filter((i) => !d.cats[i].tax), ret);
-  }
-  function emergencyMo(d, st, ret = false) {
-    return costMo(d, st, d.emergency, ret);
+  function emergencyMo(d, st) {
+    return budget(d, st).emergency;
   }
   function incomeMo(st) {
     return sum(Object.values(st.inc));
   }
   function savLine(c) {
     return {
-      mode: c.left_pct == null ? "fixed" : "pct",
+      mode: c.rest ? "rest" : c.left_pct == null ? "fixed" : "pct",
       amt: c.monthly,
       pct: c.left_pct ?? 0,
       min: c.min_monthly,
@@ -302,7 +311,7 @@
     const amt = {};
     let base = free;
     lines.forEach(([k, l]) => {
-      if (l && l.mode !== "pct") {
+      if (l && l.mode !== "pct" && l.mode !== "rest") {
         amt[k] = l.amt;
         base -= l.amt;
       }
@@ -316,6 +325,12 @@
       amt[k] = v;
       left -= v;
     });
+    const rest = lines.filter(([, l]) => l?.mode === "rest");
+    const share = rest.length ? Math.max(0, left) / rest.length : 0;
+    rest.forEach(([k]) => {
+      amt[k] = share;
+      left -= share;
+    });
     return { amt, left };
   }
   function overflowTarget(d, sv) {
@@ -326,11 +341,10 @@
     const income = incomeMo(st);
     const regular = regularMo(d, st);
     const credits = creditsMo(d, st);
-    const extra = extraMo(d, st);
-    const emergency = emergencyMo(d, st);
-    const spend = regular - credits + extra + (d.funds.length ? 0 : emergency);
-    const tax = taxMo(d, st);
-    const { amt, left } = contributions(d.savKeys.map((k) => [k, st.sav[k]]), income - spend - tax);
+    const annual = annualMo(st);
+    const spend = regular - credits + (d.funds.length ? 0 : st.emerg ?? 0);
+    const { amt, left } = contributions(d.savKeys.map((k) => [k, st.sav[k]]), income - spend - annual);
+    const emergency = st.emerg ?? sum(d.funds.map((f) => amt[`sav:${f.id}`] ?? 0));
     const overflow = {};
     d.p.savings.forEach((sv) => {
       const to = overflowTarget(d, sv);
@@ -343,12 +357,11 @@
       income,
       regular,
       credits,
-      extra,
+      annual,
       emergency,
       spend,
       savings,
       investing,
-      tax,
       amt,
       overflow,
       left
@@ -393,6 +406,12 @@
     const [aL, vL] = pts[pts.length - 1];
     if (serviceNow == null) return vL;
     return vL * (serviceNow + age - ageNow) / (serviceNow + aL - ageNow);
+  }
+  function retireSavings(d) {
+    return d.p.savings.filter((s) => s.type === "savings");
+  }
+  function drawPct(rs, key) {
+    return rs.draw?.[key] ?? rs.wd;
   }
   function ageWhen(d, partner, primaryAge) {
     return partner.age + (primaryAge - d.primary.age);
@@ -503,7 +522,10 @@
       let f = flows.get(y);
       if (!f) {
         const x = spendingAt(d, s, y, RY);
-        if (y >= RY && !inv) inv = investmentParts(d, s, base.yrs, snapshot("inv:"));
+        if (y >= RY && !inv) {
+          snapshot("inv:");
+          inv = investmentParts(d, s, base.yrs, snapshot("sav:"));
+        }
         const income = incomeFrom(d, s, { ...base, parts: [...base.parts, ...inv ?? []] }, y);
         f = { free: income - x.spend, emergency: x.emergency };
         flows.set(y, f);
@@ -520,7 +542,10 @@
       accts.forEach((x) => {
         if (x.key.startsWith("529:") && m === x.until) at[x.key] = x.bal;
       });
-      if (m === invMonth) snapshot("inv:");
+      if (m === invMonth) {
+        snapshot("inv:");
+        snapshot("sav:");
+      }
       const f = flowsAt(y);
       let need = f.emergency;
       accts.filter((x) => x.fund).forEach((x) => {
@@ -528,12 +553,12 @@
         x.bal -= take;
         need -= take;
       });
-      const active = accts.filter((x) => m < x.until && !(ret && x.stops));
-      const c = contributions(active.map((x) => [x.key, st.sav[x.key]]), f.free - need);
+      const active2 = accts.filter((x) => m < x.until && !(ret && x.stops));
+      const c = contributions(active2.map((x) => [x.key, st.sav[x.key]]), f.free - need);
       accts.forEach((x) => x.bal *= 1 + x.i);
       let overflow = 0;
       let kept = 0;
-      active.forEach((x) => {
+      active2.forEach((x) => {
         let v = c.amt[x.key] ?? 0;
         if (x.cap != null) {
           const into = Math.max(0, Math.min(v, x.cap - x.bal));
@@ -595,53 +620,10 @@
     return s.fs.nominal ? Math.pow(1 + s.rs.inf / 100, y - d.todayYear) : 1;
   }
   function spendToday(d, st) {
-    return regularMo(d, st) - creditsMo(d, st) + taxMo(d, st);
+    return regularMo(d, st) - creditsMo(d, st) + annualMo(st);
   }
-  function results(d, s) {
-    const b = budget(d, s.st);
-    const ry = retireYear(d, s.rs);
-    const R = retirementIncome(d, s, s.rs.age);
-    const net = 1 - s.fs.tax / 100;
-    const spR = spendAt(d, s, ry).spend;
-    const stage = (y) => {
-      const x = spendAt(d, s, y);
-      return incomeAt(d, s, y) - x.spend - x.savings;
-    };
-    const rows = [
-      ["Monthly budget today", null],
-      ["Take-home income", b.income, 1],
-      ["Spending (net)", b.spend, -1],
-      ["Savings", b.savings, 0],
-      ["Investing", b.investing, 0],
-      ["Tax set-aside", b.tax, -1],
-      ["Left over each month", b.left, 1],
-      ["Left over each year", b.left * 12, 1],
-      ["Before retirement", null]
-    ];
-    d.children.forEach((c, k) => {
-      const y = Math.floor(d.gradT(k)) + 1;
-      rows.push([`Left over, ${c.name} out (${y})`, y < ry ? stage(y) : NaN, 1]);
-    });
-    rows.push(["College 529s", null]);
-    d.children.forEach((c, k) => {
-      const x = kidCalc(d, s, k);
-      rows.push([`${c.name}: share of college covered`, Math.round(x.pct * 100), 1, "pct"]);
-      rows.push([`${c.name}: surplus / shortfall, today's $`, x.today, 1]);
-    });
-    rows.push(["Retirement", null]);
-    d.partners.forEach((p) => rows.push([d.partners.length > 1 ? `Retirement age (${p.name})` : "Retirement age", R.ages[p.id], 0, "age"]));
-    rows.push(
-      ["First full year retired", ry, 0, "year"],
-      ["Income after tax, at retirement", R.total * net, 1],
-      ["Income after tax, once all Social Security starts", R.full * net, 1],
-      ["Projected spending in retirement", spR, -1],
-      ["Gap / surplus at retirement", R.total * net - spR, 1],
-      ["Gap / surplus, long run", R.full * net - spR, 1]
-    );
-    return rows;
-  }
-  function diffSettings(d, A, B) {
-    const a = new Map(flatten(A));
+  function diffSettings(d, A2, B) {
+    const a = new Map(flatten(A2));
     const b = new Map(flatten(B));
     const keys = [.../* @__PURE__ */ new Set([...a.keys(), ...b.keys()])].filter((k) => !SKIP.has(k));
     const out = [];
@@ -691,6 +673,8 @@
         return `${name}: ${what[leaf] ?? leaf}`;
       }
       if (k === "on") return catLabel(sub);
+      if (k === "annual") return "Annual expenses";
+      if (k === "emerg") return "Emergency fund costs / mo";
       if (k === "plan") return `Planned: ${sub}`;
     }
     if (g === "cs") {
@@ -725,6 +709,12 @@
         const name = d.p.investments.find((x) => x.id === sub)?.name ?? sub;
         return `${name}: ${leaf === "bal" ? "balance today" : "return"}`;
       }
+      if (k === "draw") {
+        const [kind, ...rest] = sub.split(":");
+        const id = rest.join(":");
+        const name = kind === "acct" ? accountName(id) : kind === "inv" ? d.p.investments.find((x) => x.id === id)?.name ?? id : d.p.savings.find((x) => x.id === id)?.name ?? id;
+        return `${name}: yearly withdrawal`;
+      }
     }
     if (g === "fs") {
       if (k === "kg") return `Kids-gone change: ${sub}`;
@@ -736,11 +726,19 @@
   }
   function settingVal(d, path, v) {
     if (v === void 0) return "\u2013";
+    if (Array.isArray(v)) {
+      const total = sum(v.map((x) => x.amt));
+      return `${v.length} item${v.length === 1 ? "" : "s"}, ${d.p.plan.currency_symbol}${Math.round(total).toLocaleString("en-US")}/yr`;
+    }
     if (v === null) {
       if (path[1] === "sav") return "none";
+      if (path[1] === "emerg") return "same as the fund contribution";
+      if (path[1] === "draw") return "the default rate";
       return path[1] === "ages" ? `same year as ${d.primary.name}` : "at retirement";
     }
-    if (path[1] === "sav" && path[3] === "mode") return v === "pct" ? "% of left-over" : "fixed";
+    if (path[1] === "sav" && path[3] === "mode") {
+      return v === "pct" ? "% of left-over" : v === "rest" ? "the rest" : "fixed";
+    }
     if (typeof v === "boolean") return v ? "On" : "Off";
     if (path[0] === "cs" && path[2] === "school") {
       return d.p.assumptions.college.schools[String(v)]?.name ?? String(v);
@@ -756,30 +754,9 @@
     if (path[0] === "rs" || path[0] === "fs") return "retire";
     return "budget";
   }
-  function compact(d, sc) {
-    const defs = new Map(flatten(defaults(d)));
-    const out = [];
-    for (const [key, v] of flatten({ st: sc.st, cs: sc.cs, rs: sc.rs, fs: sc.fs })) {
-      if (SKIP.has(key)) continue;
-      const def = defs.get(key);
-      const differs = typeof v === "number" && typeof def === "number" ? Math.abs(v - def) > 4e-3 : !same(v, def);
-      if (differs) out.push([JSON.parse(key), typeof v === "number" ? Math.round(v * 100) / 100 : v]);
-    }
-    return { id: sc.id, name: sc.name, saved: sc.saved, d: out };
-  }
-  function expand(d, c) {
-    const defs = defaults(d);
-    const out = clone(defs);
-    const known = new Set(flatten(defs).map(([k]) => k));
-    (c.d ?? []).forEach(([path, v]) => {
-      if (path[1] === "sav" && path.length === 3 && typeof v === "number") path = [...path, "amt"];
-      if (known.has(JSON.stringify(path))) setPath(out, path, v);
-    });
-    return out;
-  }
   var SIM_CACHE = /* @__PURE__ */ new WeakMap();
   var SKIP = /* @__PURE__ */ new Set([JSON.stringify(["fs", "nominal"])]);
-  var PCT_KEYS = /* @__PURE__ */ new Set(["raise", "ret", "inf", "wd", "tax"]);
+  var PCT_KEYS = /* @__PURE__ */ new Set(["raise", "ret", "inf", "wd", "tax", "draw"]);
   function isPct(path) {
     if (path[0] === "rs" && path[1] === "inv") return path[3] === "ret";
     if (path[0] === "cs") return path[2] === "ret" || path[2] === "inf";
@@ -805,7 +782,6 @@
     const yrs = Math.max(a - d.primary.age, ...d.partners.map((p) => partnerRetireAge(d, rs, p, a) - p.age));
     const r = rs.ret / 100;
     const real = (y) => Math.pow(1 + rs.inf / 100, y);
-    const wd = rs.wd / 100 / 12;
     const parts = [];
     const ages = {};
     const years = {};
@@ -829,12 +805,13 @@
         const st = rs.acct[key];
         if (!st?.on) return;
         const bal = fv(st.bal, st.monthly, Math.round(pYrs * 12), r);
+        const w = drawPct(rs, `acct:${key}`) / 100 / 12;
         parts.push({
           kind: "account",
           key,
           name: ac.name,
           partner: p.id,
-          value: bal / real(pYrs) * wd,
+          value: bal / real(pYrs) * w,
           balance: bal,
           yrs: pYrs,
           started: true
@@ -865,29 +842,33 @@
   }
   function investmentParts(d, s, yrs, bals) {
     const real = Math.pow(1 + s.rs.inf / 100, yrs);
-    const wd = s.rs.wd / 100 / 12;
     const out = [];
-    d.p.investments.forEach((v) => {
-      const bal = bals[`inv:${v.id}`] ?? 0;
-      if (!s.rs.inv[v.id] || bal <= 0) return;
+    const add = (kind, id, name) => {
+      const key = `${kind === "investment" ? "inv" : "sav"}:${id}`;
+      const bal = bals[key] ?? 0;
+      if (bal <= 0) return;
       out.push({
-        kind: "investment",
-        key: v.id,
-        name: v.name,
+        kind,
+        key: id,
+        name,
         partner: "",
-        value: bal / real * wd,
+        value: bal / real * drawPct(s.rs, key) / 100 / 12,
         balance: bal,
         yrs,
         started: true
       });
+    };
+    d.p.investments.forEach((v) => {
+      if (s.rs.inv[v.id]) add("investment", v.id, v.name);
     });
+    retireSavings(d).forEach((sv) => add("savings", sv.id, sv.name));
     return out;
   }
   function incomeFrom(d, s, R, y) {
     const { st, rs, fs } = s;
     const n = Math.max(0, y - d.todayYear);
     const pay = sum(d.partners.filter((p) => y < R.years[p.id]).map((p) => (st.inc[p.id] ?? 0) * Math.pow(1 + (rs.raise[p.id] ?? 0) / 100, n))) + (y < R.year ? st.inc.other ?? 0 : 0);
-    const paid = sum(R.parts.filter((x) => x.kind === "investment" ? y >= R.year : y >= R.years[x.partner] && (x.kind !== "ss" || y >= (x.start ?? 0))).map((x) => x.value));
+    const paid = sum(R.parts.filter((x) => x.kind === "investment" || x.kind === "savings" ? y >= R.year : y >= R.years[x.partner] && (x.kind !== "ss" || y >= (x.start ?? 0))).map((x) => x.value));
     return pay + paid * (1 - fs.tax / 100);
   }
   function spendingAt(d, s, y, retYear) {
@@ -906,9 +887,9 @@
       cats[n] = v;
       living += v;
     });
-    const em = emergencyMo(d, st, ret);
-    living += extraMo(d, st, ret) - creditsMo(d, st, ret) + (d.funds.length ? 0 : em);
-    const tax = taxMo(d, st, ret);
+    const em = emergencyMo(d, st);
+    living += -creditsMo(d, st, ret) + (d.funds.length ? 0 : em);
+    const annual = annualMo(st);
     const health = ret ? fs.health : 0;
     return {
       y,
@@ -916,10 +897,10 @@
       ret,
       cats,
       living,
-      tax,
+      annual,
       health,
       emergency: d.funds.length ? em : 0,
-      spend: living + tax + health
+      spend: living + annual + health
     };
   }
 
@@ -954,8 +935,8 @@
     if (p.error) return p;
     app.d = new Data(p);
     app.defs = defaults(app.d);
-    const state = await get("/api/state");
-    app.S = rebase(app.defs, state.ui?.S, state.ui?.base);
+    const state2 = await get("/api/state");
+    app.S = rebase(app.defs, state2.ui?.S, state2.ui?.base);
     return p;
   }
   async function saveNow() {
@@ -1106,10 +1087,10 @@
       if (r.field === "description") delete r.field;
       return r;
     };
-    let timer2 = 0;
+    let timer3 = 0;
     const preview = () => {
-      window.clearTimeout(timer2);
-      timer2 = window.setTimeout(async () => {
+      window.clearTimeout(timer3);
+      timer3 = window.setTimeout(async () => {
         const r = build();
         const pv = $d("rd-pv");
         if (!r) {
@@ -1174,7 +1155,7 @@
       root.innerHTML = `<p class="msg err">${esc(err.message)}</p>`;
       return;
     }
-    const refresh = () => {
+    const refresh2 = () => {
       markDirty();
       renderCategorizeTab(root, markDirty);
     };
@@ -1243,10 +1224,10 @@
     });
     root.querySelector("#ct-table tbody").addEventListener("click", (e) => {
       const tr = e.target.closest("tr[data-id]");
-      if (tr) openRuleDialog(tr.dataset.id, refresh);
+      if (tr) openRuleDialog(tr.dataset.id, refresh2);
     });
-    root.querySelector("#ct-new").addEventListener("click", () => openRuleDialog(null, refresh));
-    drawRules(root, data, refresh);
+    root.querySelector("#ct-new").addEventListener("click", () => openRuleDialog(null, refresh2));
+    drawRules(root, data, refresh2);
     draw();
   }
   function describeRule(r) {
@@ -1302,7 +1283,7 @@
     if (r.how === "bank") return `bank category "${r.bank_category}"`;
     return "no rule matched (default)";
   }
-  function drawRules(root, data, refresh) {
+  function drawRules(root, data, refresh2) {
     const counts = /* @__PURE__ */ new Map();
     data.rows.forEach((r) => {
       if (r.rule != null) counts.set(r.rule, (counts.get(r.rule) ?? 0) + 1);
@@ -1314,11 +1295,11 @@
         type="button" data-mv="${i}" data-by="1" aria-label="Move down"${i === data.rules.length - 1 ? " disabled" : ""}>\u2193</button> <button class="btn sm danger"
         type="button" data-del="${i}">Delete</button></td></tr>`).join("") || '<tr><td colspan="5" class="muted">No rules yet.</td></tr>';
     const msg = root.querySelector("#ct-msg");
-    const save2 = async (rules) => {
+    const save3 = async (rules) => {
       try {
         await send("PUT", "/api/config/rules", rules);
         txData = null;
-        refresh();
+        refresh2();
       } catch (err) {
         msg.className = "msg err";
         msg.textContent = err.message;
@@ -1330,7 +1311,7 @@
         const j = i + +b.dataset.by;
         const rules = data.rules.slice();
         [rules[i], rules[j]] = [rules[j], rules[i]];
-        save2(rules);
+        save3(rules);
       });
     });
     body.querySelectorAll("[data-del]").forEach((b) => {
@@ -1341,28 +1322,66 @@
           b.textContent = "Click again";
           return;
         }
-        save2(data.rules.filter((_, i) => i !== +b.dataset.del));
+        save3(data.rules.filter((_, i) => i !== +b.dataset.del));
       });
     });
   }
 
-  // src/ui/explorer.ts
+  // src/ui/spending.ts
   var CREDIT_COLORS = ["--r2", "--r3", "--r4", "--r5", "--r1"];
   var MAX_ROWS = 400;
-  function buildExplorer() {
+  var MONTH_NAMES = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec"
+  ];
+  var DRAG_PX = 5;
+  function buildSpending() {
     const d = app.d;
-    monthOf = new Map(d.p.months.map((m, i) => [m, i]));
-    spendOT = d.costs;
+    const p = d.p;
+    A = p.all_by_cat ?? p.by_cat;
+    MON = p.all_months ?? p.months;
+    LBL = p.all_month_labels ?? p.month_labels;
+    TX = [...p.tx, ...p.other_tx ?? []];
+    monthOf = new Map(MON.map((m, i) => [m, i]));
+    yearEnd = MON.length - 1;
     credCats = d.credits;
-    REG_M = d.p.months.map((_, m) => sum(d.regular.map((c) => d.byCat[c][m])));
-    OT_M = d.p.months.map((_, m) => sum(spendOT.map((c) => d.byCat[c][m])));
-    CR_M = d.p.months.map((_, m) => -sum(credCats.map((c) => d.byCat[c][m])));
+    d.credits.forEach((c) => on[d.cats[c].name] = d.cats[c].default_on);
+    d.costs.forEach((c) => on[d.cats[c].name] = true);
+    savCats = d.cats.map((_, i) => i).filter((i) => d.cats[i].kind === "ignore" && sum(A[i] ?? []) > 0);
+    $("actbody").addEventListener("change", (e) => {
+      const el = e.target;
+      if (!el.dataset.on) return;
+      on[el.dataset.on] = el.checked;
+      buildTable();
+    });
+    $("actbody").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-pick]");
+      if (b) selectCat(b.dataset.pick === "" ? null : +b.dataset.pick);
+    });
+    document.querySelectorAll("#pview button").forEach((b) => {
+      b.addEventListener("click", () => setView(b.dataset.v));
+    });
+    $("ptools").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-act]");
+      if (!b) return;
+      if (b.dataset.act === "back") dayMonth = null;
+      else yearEnd = clampEnd(yearEnd + (b.dataset.act === "later" ? 1 : -1));
+      refresh();
+    });
     const mf = $("mfilter");
-    mf.innerHTML = '<option value="">All months</option>' + d.p.month_labels.map((l, i) => `<option value="${i}">${esc(l)}</option>`).join("");
     mf.addEventListener("change", () => {
-      selMonth = mf.value === "" ? null : +mf.value;
-      drawChart();
-      drawDetail();
+      dayMonth = mf.value === "" ? null : +mf.value;
+      refresh();
     });
     $("q").addEventListener("input", drawDetail);
     $("sort").addEventListener("change", drawDetail);
@@ -1380,7 +1399,8 @@
       const tr = e.target.closest("tr[data-id]");
       if (tr) openRuleDialog(tr.dataset.id);
     });
-    onChange(drawChart);
+    wirePointer();
+    view = MON.length > 12 ? "year" : "all";
     setMode("spend");
   }
   function selectCat(c) {
@@ -1389,58 +1409,224 @@
       markMode();
     }
     selCat = c;
-    buildChips();
-    drawChart();
-    drawDetail();
+    refresh();
+  }
+  function selectionAvg(c) {
+    const s = selection();
+    return s.length ? sum(s.map((i) => A[c][i] ?? 0)) / s.length * (isCredit(c) ? -1 : 1) : 0;
+  }
+  function selectionLabel() {
+    const s = selection();
+    if (!s.length) return "no months";
+    const span2 = s.length === 1 ? LBL[s[0]] : `${LBL[s[0]]} \u2013 ${LBL[s[s.length - 1]]}`;
+    return `${span2} (${s.length} month${s.length === 1 ? "" : "s"})`;
   }
   var selCat = null;
-  var selMonth = null;
   var mode = "spend";
+  var view = "all";
+  var yearEnd = 0;
+  var range = null;
+  var dayMonth = null;
   var recat = false;
+  var A = [];
+  var MON = [];
+  var LBL = [];
+  var TX = [];
   var monthOf = /* @__PURE__ */ new Map();
-  var spendOT = [];
   var credCats = [];
-  var REG_M = [];
-  var OT_M = [];
-  var CR_M = [];
+  var savCats = [];
+  var cols = [];
+  var dayTotals = /* @__PURE__ */ new Map();
+  var drag = null;
+  var on = {};
   var isCredit = (c) => app.d.cats[c].kind === "credit";
-  var isOne = (c) => app.d.cats[c].kind === "one_time";
   var inMode = (c) => mode === "both" ? true : mode === "cred" ? isCredit(c) : !isCredit(c);
   var credCol = (c) => CREDIT_COLORS[Math.max(0, credCats.indexOf(c)) % CREDIT_COLORS.length];
   var label = (c) => app.d.cats[c].name;
+  var span = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
+  function clampEnd(end) {
+    return Math.max(Math.min(11, MON.length - 1), Math.min(MON.length - 1, end));
+  }
+  function selection() {
+    if (view === "year") return span(Math.max(0, yearEnd - 11), yearEnd);
+    if (view === "range" && range) return span(range[0], range[1]);
+    return span(0, MON.length - 1);
+  }
+  function refresh() {
+    markView();
+    buildTable();
+    drawChart();
+    drawDetail();
+  }
   function setMode(v) {
     mode = v;
     selCat = null;
     markMode();
-    buildChips();
-    drawChart();
-    drawDetail();
+    refresh();
+  }
+  function setView(v) {
+    if (v === "range" && !range) return;
+    view = v;
+    dayMonth = null;
+    refresh();
   }
   function markMode() {
     document.querySelectorAll("#xmode button").forEach((b) => {
       b.setAttribute("aria-pressed", String(b.dataset.v === mode));
     });
   }
-  function chipText(c) {
-    const d = app.d;
-    const pre = isOne(c) ? "One-time: " : isCredit(c) ? "Credits: " : "";
-    const amt = isOne(c) ? fk(Math.abs(sum(d.byCat[c]))) : `${fk(Math.abs(d.avg(c)))}/mo`;
-    return `${pre}${esc(label(c))} <span class="num">${amt}</span>`;
-  }
-  function buildChips() {
-    const d = app.d;
-    const spendOrder = [...d.regular].sort((a, b) => d.avg(b) - d.avg(a)).concat(spendOT);
-    const order = mode === "cred" ? credCats : mode === "both" ? spendOrder.concat(credCats) : spendOrder;
-    const allLbl = { spend: "All spending", cred: "All credits", both: "Spending & credits" }[mode];
-    const chips = $("chips");
-    chips.innerHTML = `<button class="chip" type="button" data-cat="" aria-pressed="${selCat === null}">${allLbl}</button>` + order.map((c) => `<button class="chip${isOne(c) || isCredit(c) ? " ot" : ""}" type="button" data-cat="${c}" aria-pressed="${selCat === c}">${chipText(c)}</button>`).join("");
-    chips.querySelectorAll(".chip").forEach((b) => {
-      b.addEventListener("click", () => selectCat(b.dataset.cat === "" ? null : +b.dataset.cat));
+  function markView() {
+    document.querySelectorAll("#pview button").forEach((b) => {
+      b.setAttribute("aria-pressed", String(b.dataset.v === view));
+      if (b.dataset.v === "range") b.disabled = !range;
     });
+    const s = selection();
+    const tools = $("ptools");
+    if (dayMonth !== null) {
+      tools.innerHTML = `<button class="btn sm" type="button" data-act="back">\u2190 Back to months</button>`;
+    } else if (view === "year" && MON.length > 12) {
+      tools.innerHTML = `<button class="btn sm" type="button" data-act="earlier"
+      aria-label="One month earlier"${yearEnd <= 11 ? " disabled" : ""}>\u2039</button><button
+      class="btn sm" type="button" data-act="later" aria-label="One month later"${yearEnd >= MON.length - 1 ? " disabled" : ""}>\u203A</button>`;
+    } else {
+      tools.innerHTML = "";
+    }
+    $("plabel").textContent = dayMonth !== null ? `Days of ${LBL[dayMonth]}` : view === "typical" ? `Average of each month over ${MON.length} months` : selectionLabel();
+    $("chart-hint").textContent = dayMonth !== null ? "Each day of the month. Back returns to the months." : view === "all" ? "Drag across months to select a period. Click a month to see its days." : view === "year" ? "Drag sideways (or use \u2039 \u203A) to move the year. Click a month to see its days." : view === "range" ? "The selected months. Click a month to see its days; pick All data to select another period." : "Each calendar month's average across all your data; the line marks its lowest and highest year.";
+    const mf = $("mfilter");
+    mf.innerHTML = '<option value="">All months shown</option>' + s.map((i) => `<option value="${i}">${esc(LBL[i])}</option>`).join("");
+    mf.value = dayMonth === null ? "" : String(dayMonth);
+  }
+  function buildTable() {
+    const d = app.d;
+    const months = selection();
+    const n = Math.max(1, months.length);
+    const signed = (c) => months.map((m) => (isCredit(c) ? -1 : 1) * (A[c][m] ?? 0));
+    const stats = (v) => [sum(v) / n, Math.min(...v), Math.max(...v)];
+    const cells = (v, neg = false) => stats(v).map((x) => `<td class="num">${neg ? `(${fmt(x)})` : fmt(x)}</td>`).join("");
+    const nameCell = (c, pad = 0, toggle = false, pick = true) => {
+      const cat = d.cats[c];
+      const nm = esc(isCredit(c) ? cat.label || cat.name : cat.name);
+      const link = pick ? `<button class="cat-link" type="button" data-pick="${c}">${nm}</button>` : nm;
+      return `<td${pad ? ` style="padding-left:${pad}px"` : ""}>${toggle ? `<label class="tg"><input
+      type="checkbox" data-on="${esc(cat.name)}"${on[cat.name] ? " checked" : ""}>${isCredit(c) ? "\u2212 " : ""}${link}</label>` : link}</td>`;
+    };
+    const row2 = (c, pad = 0, toggle = false, pick = true) => {
+      const off = toggle && !on[d.cats[c].name];
+      return `<tr class="${[isCredit(c) ? "credit" : "", off ? "off" : "", selCat === c ? "sel" : ""].join(" ").trim()}">${nameCell(c, pad, toggle, pick)}${cells(signed(c), isCredit(c))}</tr>`;
+    };
+    const totalRow = (lbl, series2, pick = false) => `<tr class="total${pick && selCat === null ? " sel" : ""}"><td>${pick ? `<button class="cat-link" type="button"
+      data-pick="">${esc(lbl)}</button>` : esc(lbl)}</td>${cells(series2)}</tr>`;
+    const series = (list) => months.map((m) => sum(list.map((c) => (isCredit(c) ? -1 : 1) * (A[c][m] ?? 0))));
+    const groups = [];
+    d.regular.forEach((i) => {
+      if (!groups.includes(d.cats[i].group)) groups.push(d.cats[i].group);
+    });
+    const withCredits = mode === "both";
+    let h = "";
+    const counted = [];
+    const credCount = [];
+    if (mode !== "cred") {
+      groups.forEach((g) => {
+        h += `<tr class="group"><td colspan="4">${esc(g)}</td></tr>`;
+        d.regular.filter((i) => d.cats[i].group === g).sort((a, b) => d.avg(b) - d.avg(a)).forEach((i) => {
+          h += row2(i);
+          counted.push(i);
+          if (withCredits) {
+            d.offsetsOf(d.cats[i].name).forEach((c) => {
+              h += row2(c, 22, true);
+              if (on[d.cats[c].name]) credCount.push(c);
+            });
+          }
+        });
+      });
+      h += totalRow("Regular spending", series(d.regular));
+      if (d.costs.length) {
+        h += '<tr class="group"><td colspan="4">Annual, 1-time &amp; emergency</td></tr>';
+        d.costs.forEach((i) => {
+          h += row2(i, 0, true);
+          if (on[d.cats[i].name]) counted.push(i);
+          if (withCredits) {
+            d.offsetsOf(d.cats[i].name).forEach((c) => {
+              h += row2(c, 22, true);
+              if (on[d.cats[c].name] && on[d.cats[i].name]) credCount.push(c);
+            });
+          }
+        });
+      }
+      if (savCats.length) {
+        h += '<tr class="group"><td colspan="4">Savings &amp; transfers</td></tr>';
+        savCats.forEach((i) => {
+          h += row2(i, 0, true, false);
+          if (on[d.cats[i].name]) counted.push(i);
+        });
+      }
+    }
+    if (mode !== "spend") {
+      const loose = mode === "cred" ? d.credits : d.credits.filter((c) => !d.cats[c].offsets);
+      if (loose.length) {
+        h += `<tr class="group"><td colspan="4">${mode === "cred" ? "Credits" : "Other credits"}</td></tr>`;
+        loose.forEach((c) => h += row2(c, 0, true));
+        credCount.push(...loose.filter((c) => on[d.cats[c].name]));
+      }
+    }
+    if (mode === "cred") {
+      h += totalRow("All credits", series(credCount), true);
+    } else {
+      const spent = series(counted);
+      const cred = series(credCount);
+      h += totalRow(
+        mode === "both" ? "Net (ticked)" : "Total (ticked)",
+        spent.map((v, i) => v - cred[i]),
+        true
+      );
+    }
+    $("actbody").innerHTML = h;
+    $("act-avg-head").textContent = "Avg / mo";
+    $("act-note").textContent = `${selectionLabel()}. ${mode === "cred" ? "Money in, as positive amounts." : "Ticked rows count in the total."}`;
+  }
+  function buildCols() {
+    if (dayMonth !== null) {
+      const ym = MON[dayMonth];
+      const days = new Date(+ym.slice(0, 4), +ym.slice(5, 7), 0).getDate();
+      dayTotals = /* @__PURE__ */ new Map();
+      TX.filter((t) => t[0].startsWith(ym)).forEach((t) => {
+        const m = dayTotals.get(t[0]) ?? /* @__PURE__ */ new Map();
+        m.set(t[3], (m.get(t[3]) ?? 0) + t[2]);
+        dayTotals.set(t[0], m);
+      });
+      return span(1, days).map((n) => ({ label: String(n), day: `${ym}-${String(n).padStart(2, "0")}` }));
+    }
+    if (view === "typical") {
+      return MONTH_NAMES.map((name, k) => ({
+        label: name,
+        months: MON.map((m, i) => +m.slice(5, 7) === k + 1 ? i : -1).filter((i) => i >= 0)
+      }));
+    }
+    return selection().map((i) => ({ label: LBL[i], month: i }));
+  }
+  function raw(c, i) {
+    return A[c][i] ?? 0;
+  }
+  function colValue(col, cats) {
+    const one = (c, i) => (isCredit(c) ? -1 : 1) * raw(c, i);
+    if (col.day) {
+      const m = dayTotals.get(col.day);
+      return m ? sum(cats.map((c) => (isCredit(c) ? -1 : 1) * (m.get(c) ?? 0))) : 0;
+    }
+    if (col.months) {
+      return col.months.length ? sum(col.months.map((i) => sum(cats.map((c) => one(c, i))))) / col.months.length : 0;
+    }
+    return sum(cats.map((c) => one(c, col.month)));
+  }
+  function colSpread(col, cats) {
+    if (!col.months || col.months.length < 2) return null;
+    const v = col.months.map((i) => sum(cats.map((c) => (isCredit(c) ? -1 : 1) * raw(c, i))));
+    return [Math.min(...v), Math.max(...v)];
   }
   function drawChart() {
     const d = app.d;
-    const M = d.p.month_labels;
+    cols = buildCols();
     const svg = $("mchart");
     const W = 960;
     const H = 300;
@@ -1450,62 +1636,59 @@
     const B = 30;
     const pw = W - L - R;
     const ph = H - T - B;
-    const bw = pw / M.length;
-    const b = budget(d, app.S.st);
-    const savTot = b.savings + b.investing;
-    let up = [];
+    const bw = pw / Math.max(1, cols.length);
+    let up;
     let down = [];
-    let lines = [];
+    let avgOf = [];
+    const unit = dayMonth !== null ? "day" : "mo";
+    const sw = (col, name) => `<span><i class="sw" style="background:${col}"></i>${esc(name)}</span>`;
     let title;
     let leg;
-    const sw = (col, name) => `<span><i class="sw" style="background:${col}"></i>${esc(name)}</span>`;
     if (selCat === null) {
       if (mode === "cred") {
-        up = credCats.map((c) => ({
-          col: `var(${credCol(c)})`,
-          v: d.byCat[c].map((x) => -x),
-          name: label(c)
-        }));
-        const a = sum(CR_M) / d.n;
-        lines = [{ cls: "avgline", v: a }];
-        title = "All credits by month";
-        leg = up.map((x) => sw(x.col, x.name)).join("") + `<span><i class="ln"></i>Avg ${fmt(a)}/mo</span>`;
+        up = credCats.map((c) => ({ col: `var(${credCol(c)})`, cats: [c], name: label(c) }));
+        avgOf = credCats;
+        title = "All credits";
+        leg = up.map((x) => sw(x.col, x.name)).join("");
       } else {
         up = [
-          { col: "var(--accent)", v: REG_M, name: "Regular" },
-          { col: "var(--onetime)", v: OT_M, name: "One-time" }
+          { col: "var(--accent)", cats: d.regular, name: "Regular" },
+          { col: "var(--onetime)", cats: d.costs, name: "Annual, 1-time & emergency" }
         ];
+        avgOf = d.regular;
         if (mode === "both") {
-          down = [{ col: "var(--r2)", v: CR_M, name: "Credits" }];
-          title = "Spending (above) and credits (below) by month";
-          leg = sw("var(--accent)", "Regular spending") + sw("var(--onetime)", "One-time spending") + sw("var(--r2)", "Credits");
+          down = [{ col: "var(--r2)", cats: credCats, name: "Credits" }];
+          title = "Spending (above) and credits (below)";
+          leg = sw("var(--accent)", "Regular") + sw("var(--onetime)", "Annual, 1-time & emergency") + sw("var(--r2)", "Credits");
         } else {
-          const a = sum(REG_M) / d.n;
-          lines = [{ cls: "avgline", v: a }, { cls: "saveline", v: a + savTot }];
-          title = "All spending by month";
-          leg = sw("var(--accent)", "Regular") + sw("var(--onetime)", "One-time") + `<span><i class="ln"></i>Avg regular ${fmt(a)}</span><span><i class="ln save"></i>+ savings ${fmt(a + savTot)}</span>`;
+          title = "All spending";
+          leg = sw("var(--accent)", "Regular") + sw("var(--onetime)", "Annual, 1-time & emergency");
         }
       }
     } else {
-      const neg = isCredit(selCat);
-      const v = neg ? d.byCat[selCat].map((x) => -x) : d.byCat[selCat];
-      const col = neg ? `var(${credCol(selCat)})` : "var(--accent)";
-      up = [{ col, v, name: label(selCat) }];
-      if (!isOne(selCat)) lines = [{ cls: "avgline", v: sum(v) / d.n }];
-      title = `${isOne(selCat) ? "One-time: " : neg ? "Credits: " : ""}${label(selCat)} by month`;
-      leg = sw(col, label(selCat)) + (isOne(selCat) ? "" : `<span><i class="ln"></i>Avg ${fmt(sum(v) / d.n)}/mo</span>`);
+      const col = isCredit(selCat) ? `var(${credCol(selCat)})` : "var(--accent)";
+      up = [{ col, cats: [selCat], name: label(selCat) }];
+      avgOf = [selCat];
+      title = `${isCredit(selCat) ? "Credits: " : ""}${label(selCat)}`;
+      leg = sw(col, label(selCat));
     }
+    const avg = cols.length ? sum(cols.map((c) => colValue(c, avgOf))) / cols.length : 0;
+    const avgName = selCat === null && mode !== "cred" ? "Avg regular" : "Avg";
+    leg += `<span><i class="ln"></i>${avgName} ${fmt(avg)}/${unit}</span>` + (view === "typical" && dayMonth === null ? "<span>\u2502 lowest \u2013 highest year</span>" : "");
+    title += dayMonth !== null ? ` by day, ${LBL[dayMonth]}` : view === "typical" ? ", typical year" : " by month";
     $("chart-title").textContent = title;
     $("legend").innerHTML = leg;
-    const upT = M.map((_, m) => sum(up.map((x) => Math.max(x.v[m], 0))));
-    const dnT = M.map((_, m) => sum(down.map((x) => Math.max(x.v[m], 0))));
-    const maxU = Math.max(...upT, ...lines.map((l) => l.v), 1);
+    const upCats = up.flatMap((s) => s.cats);
+    const spreads = cols.map((c) => dayMonth === null ? colSpread(c, upCats) : null);
+    const upT = cols.map((c) => sum(up.map((s) => Math.max(colValue(c, s.cats), 0))));
+    const dnT = cols.map((c) => sum(down.map((s) => Math.max(colValue(c, s.cats), 0))));
+    const maxU = Math.max(...upT, ...spreads.map((s) => s ? s[1] : 0), avg, 1);
     const maxD = Math.max(...dnT, 0);
     const step = niceStep(maxU + maxD);
     const topU = Math.ceil(maxU / step) * step;
     const topD = maxD ? Math.ceil(maxD / step) * step : 0;
-    const span = topU + topD;
-    const y = (v) => T + ph * (topU - v) / span;
+    const yspan = topU + topD;
+    const y = (v) => T + ph * (topU - v) / yspan;
     let g = "";
     for (let v = -topD; v <= topU + 1e-6; v += step) {
       g += `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${v < 0 ? "\u2212" : ""}${fk(Math.abs(v))}</text>`;
@@ -1513,13 +1696,14 @@
     if (topD) {
       g += `<line x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}" style="stroke:var(--ink3);stroke-width:1.5"/>`;
     }
-    M.forEach((lab, m) => {
-      const x = L + m * bw + bw * 0.18;
+    const every = Math.ceil(cols.length / (dayMonth !== null ? 16 : 14));
+    cols.forEach((col, k) => {
+      const x = L + k * bw + bw * 0.18;
       const w = bw * 0.64;
       let bars = "";
       let base = y(0);
       up.forEach((s) => {
-        const h = ph * Math.max(s.v[m], 0) / span;
+        const h = ph * Math.max(colValue(col, s.cats), 0) / yspan;
         if (h > 0.5) {
           base -= h;
           bars += `<rect x="${x}" y="${base}" width="${w}" height="${Math.max(h - 2, 0.5)}" rx="3" style="fill:${s.col}"/>`;
@@ -1527,71 +1711,115 @@
       });
       base = y(0);
       down.forEach((s) => {
-        const h = ph * Math.max(s.v[m], 0) / span;
+        const h = ph * Math.max(colValue(col, s.cats), 0) / yspan;
         if (h > 0.5) {
           bars += `<rect x="${x}" y="${base + 2}" width="${w}" height="${Math.max(h - 2, 0.5)}" rx="3" style="fill:${s.col}"/>`;
           base += h;
         }
       });
-      let tip = `<b>${esc(lab)}</b>`;
-      up.concat(down).forEach((s) => {
-        if (Math.abs(s.v[m]) >= 0.5) tip += `<br>${esc(s.name)} ${fmt(s.v[m])}`;
-      });
-      if (selCat === null && mode === "both") tip += `<br><b>Net spending ${fmt(upT[m] - dnT[m])}</b>`;
-      else if (up.length > 1) tip += `<br><b>Total ${fmt(upT[m])}</b>`;
-      if (selCat !== null) {
-        const n = d.p.tx.filter((t) => t[3] === selCat && monthOf.get(t[0].slice(0, 7)) === m).length;
-        tip += ` \xB7 ${n} transaction${n === 1 ? "" : "s"}`;
+      const sp = spreads[k];
+      if (sp) {
+        const cx = L + k * bw + bw / 2;
+        bars += `<line class="whisk" x1="${cx}" x2="${cx}" y1="${y(sp[1])}" y2="${y(sp[0])}"/><line
+        class="whisk" x1="${cx - 6}" x2="${cx + 6}" y1="${y(sp[1])}" y2="${y(sp[1])}"/><line
+        class="whisk" x1="${cx - 6}" x2="${cx + 6}" y1="${y(sp[0])}" y2="${y(sp[0])}"/>`;
       }
-      const on = selMonth === m;
-      g += `<g class="m" data-m="${m}" data-tip="${tip.replace(/"/g, "&quot;")}">${bars}<rect class="hit" x="${L + m * bw}" y="${T}" width="${bw}" height="${ph}"/><text x="${L + m * bw + bw / 2}" y="${H - 10}" text-anchor="middle" ${on ? 'class="month-on" style="font-weight:600"' : ""}>${on ? "\u25B8 " : ""}${esc(lab)}</text></g>`;
-    });
-    lines.forEach((l) => {
-      g += `<line class="${l.cls}" x1="${L}" x2="${W - R}" y1="${y(l.v)}" y2="${y(l.v)}"/>`;
-    });
-    svg.innerHTML = g;
-    svg.querySelectorAll("g.m").forEach((el) => {
-      el.addEventListener("mousemove", (e) => showTip(e, el.dataset.tip));
-      el.addEventListener("mouseleave", hideTip);
-      el.addEventListener("click", () => {
-        const m = +el.dataset.m;
-        selMonth = selMonth === m ? null : m;
-        $("mfilter").value = selMonth === null ? "" : String(selMonth);
-        drawChart();
-        drawDetail();
+      const head = col.day ? `${LBL[dayMonth]} ${col.label}` : col.months ? `${col.label}, average of ${col.months.length} year${col.months.length === 1 ? "" : "s"}` : LBL[col.month];
+      let tip = `<b>${esc(head)}</b>`;
+      up.concat(down).forEach((s) => {
+        const v = colValue(col, s.cats);
+        if (Math.abs(v) >= 0.5) tip += `<br>${esc(s.name)} ${fmt(v)}`;
       });
+      if (selCat === null && mode === "both") tip += `<br><b>Net ${fmt(upT[k] - dnT[k])}</b>`;
+      else if (up.length > 1) tip += `<br><b>Total ${fmt(upT[k])}</b>`;
+      if (sp) tip += `<br>Lowest ${fmt(sp[0])} \xB7 highest ${fmt(sp[1])}`;
+      const lab = k % every === 0 || cols.length <= 14 ? `<text x="${L + k * bw + bw / 2}" y="${H - 10}" text-anchor="middle">${esc(col.label)}</text>` : "";
+      g += `<g class="m" data-k="${k}" data-tip="${tip.replace(/"/g, "&quot;")}">${bars}<rect class="hit" x="${L + k * bw}" y="${T}" width="${bw}" height="${ph}"/>${lab}</g>`;
     });
+    g += `<line class="avgline" x1="${L}" x2="${W - R}" y1="${y(avg)}" y2="${y(avg)}"/><rect id="brush" class="brush" x="0" y="${T}" width="0" height="${ph}" visibility="hidden"/>`;
+    svg.innerHTML = g;
+    svg.dataset.l = String(L);
+    svg.dataset.bw = String(bw);
+    svg.querySelectorAll("g.m").forEach((el) => {
+      el.addEventListener("mousemove", (e) => {
+        if (!drag?.moved) showTip(e, el.dataset.tip);
+      });
+      el.addEventListener("mouseleave", hideTip);
+    });
+    svg.classList.toggle("pan", view === "year" && dayMonth === null && MON.length > 12);
+    svg.classList.toggle("brushable", view === "all" && dayMonth === null);
+  }
+  function wirePointer() {
+    const svg = $("mchart");
+    const colAt = (clientX) => {
+      const r = svg.getBoundingClientRect();
+      const x = (clientX - r.left) * 960 / r.width;
+      const k = Math.floor((x - +svg.dataset.l) / +svg.dataset.bw);
+      return Math.max(0, Math.min(cols.length - 1, k));
+    };
+    svg.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      drag = { x: e.clientX, col: colAt(e.clientX), end: yearEnd, moved: false };
+      svg.setPointerCapture(e.pointerId);
+    });
+    svg.addEventListener("pointermove", (e) => {
+      if (!drag) return;
+      if (!drag.moved && Math.abs(e.clientX - drag.x) < DRAG_PX) return;
+      drag.moved = true;
+      hideTip();
+      if (dayMonth !== null) return;
+      if (view === "year") {
+        const r = svg.getBoundingClientRect();
+        const shift = Math.round((e.clientX - drag.x) * 960 / r.width / +svg.dataset.bw);
+        const end = clampEnd(drag.end - shift);
+        if (end !== yearEnd) {
+          yearEnd = end;
+          drawChart();
+          markView();
+        }
+      } else if (view === "all") {
+        const a = Math.min(drag.col, colAt(e.clientX));
+        const b = Math.max(drag.col, colAt(e.clientX));
+        const brush = svg.querySelector("#brush");
+        const l = +svg.dataset.l;
+        const bw = +svg.dataset.bw;
+        brush.setAttribute("x", String(l + a * bw));
+        brush.setAttribute("width", String((b - a + 1) * bw));
+        brush.setAttribute("visibility", "visible");
+      }
+    });
+    svg.addEventListener("pointerup", (e) => {
+      if (!drag) return;
+      const d0 = drag;
+      drag = null;
+      if (!d0.moved) {
+        const col = cols[colAt(e.clientX)];
+        if (col?.month !== void 0) {
+          dayMonth = col.month;
+          refresh();
+        }
+        return;
+      }
+      if (dayMonth !== null) return;
+      if (view === "all") {
+        const a = cols[Math.min(d0.col, colAt(e.clientX))].month;
+        const b = cols[Math.max(d0.col, colAt(e.clientX))].month;
+        range = [a, b];
+        view = "range";
+      }
+      refresh();
+    });
+    svg.addEventListener("pointercancel", () => drag = null);
   }
   function merchKey(desc) {
     return desc.replace(/^(SQ|TST|SP|DD|PB|EB|ACT|RF|FH|IN|COT|TCB|CKE|SPO)\s*\*\s*/i, "$1 ").replace(/[*#].*$/, "").replace(/\s+\d[\d\s-]*.*$/, "").replace(/\s+(INC|LLC)\.?$/i, "").trim().toUpperCase();
   }
   function drawDetail() {
-    const d = app.d;
-    const M = d.p.month_labels;
-    const pool = d.p.tx.filter((t) => selCat === null ? inMode(t[3]) : t[3] === selCat);
+    const months = new Set(dayMonth !== null ? [dayMonth] : selection());
+    const pool = TX.filter((t) => (selCat === null ? inMode(t[3]) : t[3] === selCat) && months.has(monthOf.get(t[0].slice(0, 7)) ?? -1));
     const credView = selCat !== null ? isCredit(selCat) : mode === "cred";
     const sg = credView ? -1 : 1;
     const mixed = selCat === null && mode === "both";
-    const kpi = (lbl, v, sub = "") => `<div class="kpi"><span class="eyebrow">${lbl}</span><span class="v">${v}</span>${sub ? `<span class="small muted">${sub}</span>` : ""}</div>`;
-    const k = $("kpis");
-    if (selCat !== null && isOne(selCat)) {
-      const vals = d.byCat[selCat].map((x) => x * sg);
-      const total = sum(vals);
-      k.innerHTML = kpi("Total", fmt(total)) + kpi("Per month", fmt(total / d.n)) + kpi("Transactions", String(pool.length)) + kpi("Months", vals.map((v, i) => v > 0 ? M[i].slice(0, 3) : null).filter(Boolean).join(", "));
-    } else if (mixed) {
-      const spend = sum(REG_M) + sum(OT_M);
-      const cred = sum(CR_M);
-      k.innerHTML = kpi("Spending / mo", fmt(spend / d.n), "incl. one-time") + kpi("Credits / mo", fmt(cred / d.n)) + kpi("Net / mo", fmt((spend - cred) / d.n)) + kpi(`${d.n}-month net`, fmt(spend - cred));
-    } else {
-      const vals = selCat === null ? mode === "cred" ? CR_M : REG_M : d.byCat[selCat].map((x) => x * sg);
-      const hiM = vals.indexOf(Math.max(...vals));
-      const loM = vals.indexOf(Math.min(...vals));
-      k.innerHTML = kpi("Avg / month", fmt(sum(vals) / d.n)) + kpi("High", fmt(vals[hiM]), M[hiM]) + kpi("Low", fmt(vals[loM]), M[loM]) + kpi(
-        `${d.n}-month total`,
-        fmt(sum(vals)),
-        selCat === null && mode === "spend" ? "regular only" : ""
-      );
-    }
     const mm = /* @__PURE__ */ new Map();
     pool.forEach((t) => {
       const key = merchKey(t[1]) || t[1];
@@ -1604,21 +1832,26 @@
     const mx = top.length ? Math.abs(top[0][1][0]) || 1 : 1;
     $("merchants").innerHTML = top.map(([n, [v, c, cat]]) => `<tr><td>${esc(n)}<div class="bar" style="width:${Math.max(2, 100 * Math.abs(v) / mx)}%;${isCredit(cat) ? `background:var(${credCol(cat)})` : ""}"></div></td><td class="r">${fmt(v)}<div class="small muted">${c}\xD7</div></td></tr>`).join("");
     const q = $in("q").value.trim().toLowerCase();
-    let list = pool.filter((t) => (selMonth === null || monthOf.get(t[0].slice(0, 7)) === selMonth) && (!q || t[1].toLowerCase().includes(q)));
+    let list = pool.filter((t) => !q || t[1].toLowerCase().includes(q));
     list = $("sort").value === "amt" ? list.slice().sort((a, b) => Math.abs(b[2]) - Math.abs(a[2])) : list.slice().sort((a, b) => b[0].localeCompare(a[0]));
     const shown = list.slice(0, MAX_ROWS);
     const lt = sum(list.map((t) => t[2]));
+    const multiYear = new Set(list.map((t) => t[0].slice(0, 4))).size > 1;
     $("tx-count").textContent = `${list.length} \xB7 ${mixed ? `net ${fmt(lt)}` : fmt(sg * lt)}` + (list.length > MAX_ROWS ? ` \xB7 first ${MAX_ROWS} shown` : "");
-    $("txlist").innerHTML = shown.map((t) => `<tr data-id="${esc(t[5])}"><td class="d">${t[0].slice(5)}</td><td>${esc(t[1])}${selCat === null ? ` <span class="tag">${esc(label(t[3]))}</span>` : ""}</td><td class="r">${fmt(credView ? -t[2] : t[2], 2)}</td></tr>`).join("") || '<tr><td class="muted">No transactions match.</td></tr>';
+    $("txlist").innerHTML = shown.map((t) => `<tr data-id="${esc(t[5])}"><td class="d">${multiYear ? t[0] : t[0].slice(5)}</td><td>${esc(t[1])}${selCat === null ? ` <span class="tag">${esc(label(t[3]))}</span>` : ""}</td><td class="r">${fmt(credView ? -t[2] : t[2], 2)}</td></tr>`).join("") || '<tr><td class="muted">No transactions match.</td></tr>';
   }
 
   // src/ui/planner.ts
   function buildPlanner() {
     const d = app.d;
-    $("avg-head").textContent = `${d.n}-mo avg`;
-    $("planner-sub").textContent = `Starts at each category's ${d.n}-month average. Type a new number to try a change.`;
-    buildTable();
+    $("planner-sub").textContent = `Planned / mo starts at each category's ${d.n}-month average. Type a new number to try a change, and save it as a budget.`;
+    buildTable2();
     buildSide();
+    $("cmp-sel").addEventListener("change", () => {
+      cmpKey = $("cmp-sel").value;
+      update();
+    });
+    refreshCompare();
     onChange(update);
     update();
   }
@@ -1640,42 +1873,49 @@
       const v = S.st.sav[el.dataset.sav]?.[el.dataset.f];
       el.value = v == null ? "" : String(v);
     });
+    $in("em-amt").value = S.st.emerg == null ? "" : String(S.st.emerg);
+    renderAnnual();
   }
-  function buildTable() {
+  function refreshCompare() {
+    const sel = $("cmp-sel");
+    const list = savedBudgets();
+    if (cmpKey !== "avg" && !list.some((b) => b.id === cmpKey)) cmpKey = "avg";
+    sel.innerHTML = `<option value="avg">${app.d.n}-mo avg</option>` + list.map((b) => `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join("");
+    sel.value = cmpKey;
+    if (document.getElementById("psum")?.childElementCount) update();
+  }
+  var cmpKey = "avg";
+  function compareSt() {
+    const b = savedBudgets().find((x) => x.id === cmpKey);
+    return b ? rebaseBudget(app.defs.st, b.st, b.base) : app.defs.st;
+  }
+  function buildTable2() {
     const d = app.d;
     const groups = [];
     d.regular.forEach((i) => {
       if (!groups.includes(d.cats[i].group)) groups.push(d.cats[i].group);
     });
     let h = "";
-    const range = (i, sign = 1) => {
-      const v = d.byCat[i].map((x) => x * sign);
-      return `${fk(Math.min(...v))} \u2013 ${fk(Math.max(...v))}`;
-    };
     groups.forEach((g) => {
-      h += `<tr class="group"><td colspan="5">${esc(g)}</td></tr>`;
+      h += `<tr class="group"><td colspan="4">${esc(g)}</td></tr>`;
       d.regular.filter((i) => d.cats[i].group === g).sort((a, b) => d.avg(b) - d.avg(a)).forEach((i) => {
         const subs = d.offsetsOf(d.cats[i].name).filter((c) => d.isPlannerCredit(c));
         h += `<tr><td><button class="cat-link" data-cat="${i}" type="button">${esc(d.cats[i].name)}</button>${subs.length ? ' <span class="small muted">expenses</span>' : ""}</td>
-            <td class="num">${fmt(d.avg(i))}</td><td class="range num">${range(i)}</td>
             <td><input class="amt" type="number" step="25" inputmode="decimal" id="p-${i}"
               data-cat="${i}" aria-label="Planned monthly ${esc(d.cats[i].name)}"></td>
-            <td><span class="delta num" id="d-${i}"></span></td></tr>`;
+            <td class="num" id="c-${i}"></td><td><span class="delta num" id="d-${i}"></span></td></tr>`;
         if (subs.length) {
-          h += subs.map((c) => creditRow(c, range(c, -1))).join("") + `<tr class="subtot"><td style="padding-left:22px">${esc(d.cats[i].name)}, net</td>
-                <td class="num" id="net-avg-${i}"></td><td></td>
-                <td class="num" id="net-plan-${i}" style="padding-right:14px"></td><td></td></tr>`;
+          h += subs.map(creditRow).join("") + `<tr class="subtot"><td style="padding-left:22px">${esc(d.cats[i].name)}, net</td>
+                <td class="num" id="net-p-${i}" style="padding-right:14px"></td>
+                <td class="num" id="net-c-${i}"></td><td></td></tr>`;
         }
       });
     });
-    h += `<tr class="total"><td>Total regular spending</td><td class="num" id="t-avg"></td><td></td>
-    <td class="num" id="t-plan" style="padding-right:14px"></td>
+    h += `<tr class="total"><td>Total regular spending</td>
+    <td class="num" id="t-p" style="padding-right:14px"></td><td class="num" id="t-c"></td>
     <td><span class="delta num" id="t-d"></span></td></tr>`;
     const loose = d.credits.filter((c) => d.isPlannerCredit(c) && !d.cats[c].offsets);
-    if (loose.length) {
-      h += loose.map((c) => creditRow(c, range(c, -1))).join("") + `<tr class="total"><td>Net spending</td><td class="num" id="n-avg"></td><td></td>
-        <td class="num" id="n-plan" style="padding-right:14px"></td><td></td></tr>`;
-    }
+    if (loose.length) h += loose.map(creditRow).join("");
     const body = $("ptbody");
     body.innerHTML = h;
     body.querySelectorAll("input.amt").forEach((inp) => {
@@ -1689,21 +1929,32 @@
     body.querySelectorAll(".cat-link").forEach((b) => {
       b.addEventListener("click", () => {
         selectCat(+b.dataset.cat);
-        scrollToEl($("explore"));
+        scrollToEl($("spending"));
       });
     });
+    const sumRow = (id, label2, cls = "") => `<tr class="${cls}"><td>${label2}</td>
+    <td class="num" id="sp-${id}" style="padding-right:14px"></td><td class="num" id="sc-${id}"></td>
+    <td><span class="delta num" id="sd-${id}"></span></td></tr>`;
+    $("psum").innerHTML = sumRow("net", "Net spending") + sumRow("an", "Annual expenses") + sumRow("em", 'Emergency fund costs <span class="small muted" id="em-how"></span>') + savLabels().map(([k, label2]) => sumRow(k.replace(":", "-"), esc(label2))).join("") + sumRow("tot", "Monthly total, spending + savings", "total");
   }
-  function creditRow(c, range) {
+  function creditRow(c) {
     const cat = app.d.cats[c];
     const name = cat.label || cat.name;
     return `<tr class="credit" id="row-${c}"><td style="padding-left:22px">
     <label class="toggle" style="align-items:center"><input type="checkbox"
       data-tg="${esc(cat.name)}"><span>\u2212 <button class="cat-link" data-cat="${c}" type="button">${esc(name)}</button>${cat.note ? ` <span class="small muted">${esc(cat.note)}</span>` : ""}
     </span></label></td>
-    <td class="num">(${fmt(app.d.credAvg(c))})</td><td class="range num">${range}</td>
     <td><input class="amt" type="number" step="25" inputmode="decimal" id="p-${c}" data-cat="${c}"
       aria-label="Planned monthly ${esc(name)}"></td>
-    <td><span class="delta num" id="d-${c}"></span></td></tr>`;
+    <td class="num" id="c-${c}"></td><td><span class="delta num" id="d-${c}"></span></td></tr>`;
+  }
+  function savLabels() {
+    const d = app.d;
+    return [
+      ...d.children.map((c) => [`529:${c.id}`, `529, ${c.name}`]),
+      ...d.p.savings.map((s) => [`sav:${s.id}`, s.name]),
+      ...d.p.investments.map((v) => [`inv:${v.id}`, v.name])
+    ];
   }
   function bindToggles(root) {
     root.querySelectorAll("[data-tg]").forEach((el) => {
@@ -1716,25 +1967,18 @@
   function buildSide() {
     const { d } = app;
     const p = d.p;
-    const row = (key, attr, label2, note = "") => `<div class="row"><label for="${attr}-${esc(key)}">${esc(label2)}${note ? ` <span class="small muted">\xB7 ${esc(note)}</span>` : ""}</label><input class="amt"
+    const row2 = (key, attr, label2, note = "") => `<div class="row"><label for="${attr}-${esc(key)}">${esc(label2)}${note ? ` <span class="small muted">\xB7 ${esc(note)}</span>` : ""}</label><input class="amt"
         id="${attr}-${esc(key)}" data-${attr}="${esc(key)}" type="number" step="50"
         inputmode="decimal"></div>`;
-    $("inc-rows").innerHTML = d.partners.map((x) => row(x.id, "inc", x.name, x.take_home_note)).join("") + row("other", "inc", "Other income");
+    $("inc-rows").innerHTML = d.partners.map((x) => row2(x.id, "inc", x.name, x.take_home_note)).join("") + row2("other", "inc", "Other income");
     const kind = { stocks: "stocks", bonds: "bonds", savings: "savings", emergency: "emergency fund" };
     $("sav-rows").innerHTML = d.children.map((c) => savRow(`529:${c.id}`, `529, ${c.name}`)).join("") + p.savings.map((s) => savRow(`sav:${s.id}`, s.name, kind[s.type])).join("") + p.investments.map((v) => savRow(`inv:${v.id}`, v.name, kind[v.type])).join("");
     $("sav-note").textContent = [
       d.children.length ? "529 contributions stop at each child's high school graduation." : "",
       p.investments.length ? "Investments are added to their balance in Retirement and stop at retirement." : "",
-      '"% left" puts in a share of what is left each month after spending, taxes and the fixed amounts.'
+      'Fixed amounts come off first; "% left" takes a share of what is left after spending, annual expenses and the fixed amounts; "rest" splits whatever is still left evenly.'
     ].filter(Boolean).join(" ");
-    COST_KINDS.forEach((k) => {
-      const list = k === "annual" ? d.annual : k === "one_time" ? d.oneTime : d.emergency;
-      const panel = $(`cost-${k}`);
-      panel.hidden = !list.length;
-      panel.querySelector(".cost-rows").innerHTML = list.map(costToggle).join("");
-    });
     const side = $("sav-rows").closest(".side");
-    bindToggles(side);
     side.querySelectorAll("[data-inc]").forEach((el) => {
       el.addEventListener("input", () => {
         app.S.st.inc[el.dataset.inc] = num(el);
@@ -1756,6 +2000,12 @@
         changed();
       });
     });
+    wireAnnual();
+    $in("em-amt").addEventListener("input", () => {
+      const el = $in("em-amt");
+      app.S.st.emerg = el.value === "" ? null : num(el);
+      changed();
+    });
     const flex = d.regular.filter((i) => d.cats[i].flexible);
     $("trim").hidden = !flex.length;
     $("trim-note").textContent = (flex.length ? `Flexible spending = ${flex.map((i) => d.cats[i].name.toLowerCase()).join(", ")}. ` : "") + "Your changes are saved with the plan.";
@@ -1764,6 +2014,18 @@
       fillPlanner();
       changed();
     });
+    const fill = $("fill");
+    fill.addEventListener("mouseenter", () => {
+      fill.title = `Set Planned / mo to the averages for ${selectionLabel()}, the period shown in Spending`;
+    });
+    fill.addEventListener("click", () => {
+      [...d.regular, ...d.credits.filter((c) => d.isPlannerCredit(c))].forEach((i) => {
+        app.S.st.plan[d.cats[i].name] = Math.round(selectionAvg(i));
+      });
+      fillPlanner();
+      changed();
+      $("trim-note").textContent = `Filled from Spending: ${selectionLabel()}.`;
+    });
     $("trim").addEventListener("click", () => {
       flex.forEach((i) => app.S.st.plan[d.cats[i].name] = Math.round(d.avg(i) * 0.9));
       fillPlanner();
@@ -1771,59 +2033,90 @@
     });
     fillPlanner();
   }
+  function renderAnnual() {
+    $("an-rows").innerHTML = (app.S.st.annual ?? []).map((a, i) => `<div class="an-row"
+    data-i="${i}"><input type="text" data-af="name" value="${esc(a.name)}" placeholder="e.g. Taxes"
+    aria-label="Annual expense name"><input class="amt" type="number" step="100" inputmode="decimal"
+    data-af="amt" value="${a.amt}" aria-label="${esc(a.name || "Annual expense")} per year"><button
+    class="btn sm" type="button" data-arm aria-label="Remove ${esc(a.name || "this expense")}">\xD7</button>
+    </div>`).join("") || '<p class="small muted">No annual expenses. Add taxes, insurance\u2026</p>';
+  }
+  function wireAnnual() {
+    const rows = $("an-rows");
+    rows.addEventListener("input", (e) => {
+      const el = e.target;
+      const i = +el.closest("[data-i]").dataset.i;
+      const item = app.S.st.annual[i];
+      if (el.dataset.af === "name") item.name = el.value;
+      else item.amt = num(el);
+      changed();
+    });
+    rows.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-arm]");
+      if (!b) return;
+      const i = +b.closest("[data-i]").dataset.i;
+      app.S.st.annual.splice(i, 1);
+      renderAnnual();
+      changed();
+    });
+    $("an-add").addEventListener("click", () => {
+      app.S.st.annual.push({ name: "", amt: 0 });
+      renderAnnual();
+      changed();
+      rows.querySelector(".an-row:last-child input")?.focus();
+    });
+  }
   function update() {
     const { d, S } = app;
     const st = S.st;
-    let tAvg = 0;
-    let tPlan = 0;
-    const setDelta = (i, a, p, goodUp) => {
-      const dv = Math.abs(p - a) < 0.5 ? 0 : Math.round(p - a);
-      const el = $(`d-${i}`);
+    const cs = compareSt();
+    const setDiff = (el, p, c, goodUp) => {
+      const dv = Math.abs(p - c) < 0.5 ? 0 : Math.round(p - c);
       el.textContent = dv ? (dv > 0 ? "+" : "\u2212") + fmt(Math.abs(dv)) : "";
-      el.className = `delta num ${dv > 0 === goodUp ? "pos" : "neg"}`;
-      if (!dv) el.className = "delta num";
+      el.className = dv ? `delta num ${dv > 0 === goodUp ? "pos" : "neg"}` : "delta num";
+      return dv;
+    };
+    const cell = (i, goodUp) => {
+      const n = d.cats[i].name;
+      const p = st.plan[n] ?? 0;
+      const c = cs.plan[n] ?? 0;
+      $(`c-${i}`).textContent = fmt(c);
+      const dv = setDiff($(`d-${i}`), p, c, goodUp);
       $(`p-${i}`).classList.toggle("changed", !!dv);
     };
-    d.regular.forEach((i) => {
-      const a = d.avg(i);
-      const p = st.plan[d.cats[i].name] ?? 0;
-      tAvg += a;
-      tPlan += p;
-      setDelta(i, a, p, false);
-    });
+    d.regular.forEach((i) => cell(i, false));
     d.credits.filter((c) => d.isPlannerCredit(c)).forEach((c) => {
-      setDelta(c, d.credAvg(c), st.plan[d.cats[c].name] ?? 0, true);
+      cell(c, true);
       $(`row-${c}`).classList.toggle("pane-off", !st.on[d.cats[c].name]);
     });
+    const net = (s, i) => (s.plan[d.cats[i].name] ?? 0) - sum(d.offsetsOf(d.cats[i].name).filter((c) => s.on[d.cats[c].name]).map((c) => s.plan[d.cats[c].name] ?? 0));
     d.regular.forEach((i) => {
-      const el = document.getElementById(`net-avg-${i}`);
+      const el = document.getElementById(`net-p-${i}`);
       if (!el) return;
-      const subs = d.offsetsOf(d.cats[i].name).filter((c) => st.on[d.cats[c].name]);
-      el.textContent = fmt(d.avg(i) - sum(subs.map((c) => d.credAvg(c))));
-      $(`net-plan-${i}`).textContent = fmt((st.plan[d.cats[i].name] ?? 0) - sum(subs.map((c) => st.plan[d.cats[c].name] ?? 0)));
+      el.textContent = fmt(net(st, i));
+      $(`net-c-${i}`).textContent = fmt(net(cs, i));
     });
-    const onCredits = d.credits.filter((c) => d.isPlannerCredit(c) && st.on[d.cats[c].name]);
-    if (document.getElementById("n-avg")) {
-      $("n-avg").textContent = fmt(tAvg - sum(onCredits.map((c) => d.credAvg(c))));
-      $("n-plan").textContent = fmt(tPlan - sum(onCredits.map((c) => st.plan[d.cats[c].name] ?? 0)));
-    }
-    const dT = Math.abs(tPlan - tAvg) < 0.5 ? 0 : Math.round(tPlan - tAvg);
-    $("t-avg").textContent = fmt(tAvg);
-    $("t-plan").textContent = fmt(tPlan);
-    const td = $("t-d");
-    td.textContent = dT ? (dT > 0 ? "+" : "\u2212") + fmt(Math.abs(dT)) : "";
-    td.className = `delta num ${dT > 0 ? "neg" : dT < 0 ? "pos" : ""}`;
-    d.costs.forEach((i) => {
-      const el = document.getElementById(`ot-net-${i}`);
-      if (el) el.textContent = fmt(oneTimeNet(d, st, i));
-      const on = !!st.on[d.cats[i].name];
-      document.querySelectorAll(`[data-parent="${CSS.escape(d.cats[i].name)}"]`).forEach((sub) => {
-        sub.disabled = !on;
-        sub.parentElement.classList.toggle("pane-off", !on);
-      });
-    });
+    const reg = (s) => sum(d.regular.map((i) => s.plan[d.cats[i].name] ?? 0));
+    $("t-p").textContent = fmt(reg(st));
+    $("t-c").textContent = fmt(reg(cs));
+    setDiff($("t-d"), reg(st), reg(cs), false);
+    const bp = budget(d, st);
+    const bc = budget(d, cs);
+    const sumLine = (id, p, c, goodUp) => {
+      $(`sp-${id}`).textContent = fmt(p);
+      $(`sc-${id}`).textContent = fmt(c);
+      setDiff($(`sd-${id}`), p, c, goodUp);
+    };
+    const fund = d.funds.length > 0;
+    sumLine("net", bp.spend - (fund ? 0 : bp.emergency), bc.spend - (fund ? 0 : bc.emergency), false);
+    sumLine("an", bp.annual, bc.annual, false);
+    sumLine("em", bp.emergency, bc.emergency, false);
+    $("em-how").textContent = fund ? "(paid from the fund, not in the total)" : "";
+    savLabels().forEach(([k]) => sumLine(k.replace(":", "-"), bp.amt[k] ?? 0, bc.amt[k] ?? 0, true));
+    const total = (b) => b.spend + b.annual + b.savings + b.investing;
+    sumLine("tot", total(bp), total(bc), false);
+    $("an-total").textContent = `${fmt(sum(st.annual.map((a) => a.amt)))}/yr \xB7 ${fmt(bp.annual)}/mo`;
     updateSavings();
-    updateStrip();
   }
   function savRow(key, label2, note = "") {
     const k = esc(key);
@@ -1834,23 +2127,12 @@
     return `<div class="savline" data-line="${k}"><div class="row"><span>${esc(label2)}${note ? ` <span class="small muted">\xB7 ${esc(note)}</span>` : ""}</span><span class="ctls"><span
       class="seg sm" role="group" aria-label="${esc(label2)} contribution type"><button
       type="button" data-key="${k}" data-mode="fixed">$/mo</button><button type="button"
-      data-key="${k}" data-mode="pct">% left</button></span><span data-show="fixed">${inp("amt", "amt", "per month")}</span><span data-show="pct">${inp("pct", "amt pct", "percent of left-over", 5)}%</span></span></div>
+      data-key="${k}" data-mode="pct">% left</button><button type="button" data-key="${k}"
+      data-mode="rest" title="An even share of whatever is left after everything else">rest</button></span><span
+      data-show="fixed">${inp("amt", "amt", "per month")}</span><span data-show="pct">${inp("pct", "amt pct", "percent of left-over", 5)}%</span><span data-show="rest"
+      class="num" data-rest="${k}"></span></span></div>
     <div class="pctrow" data-show="pct">min ${inp("min", "amt", "at least per month")} max ${inp("max", "amt", "at most per month")} <span class="num" data-out="${k}"></span></div>
     <span class="small muted" data-note="${k}"></span></div>`;
-  }
-  function costToggle(i) {
-    const d = app.d;
-    const cat = d.cats[i];
-    const total = sum(d.byCat[i]);
-    const label2 = cat.label || `Include ${cat.name.toLowerCase()}`;
-    let h = `<label class="toggle"><input type="checkbox" data-tg="${esc(cat.name)}"><span>${esc(label2)} <span class="num">${fmt(d.avg(i))}</span>/mo <span class="small muted">(${fmt(total)} over ${d.n} months${cat.note ? `; ${esc(cat.note)}` : ""})</span></span></label>`;
-    d.offsetsOf(cat.name).forEach((c) => {
-      const cc = d.cats[c];
-      h += `<label class="toggle" style="padding-left:24px"><input type="checkbox"
-      data-tg="${esc(cc.name)}" data-parent="${esc(cat.name)}"><span>${esc(cc.label || `Subtract ${cc.name.toLowerCase()}`)} <span class="num">${fmt(d.credAvg(c))}</span>/mo <span class="small muted">(${fmt(-sum(d.byCat[c]))}${cc.note ? `; ${esc(cc.note)}` : ""}). Net: <span class="num" id="ot-net-${i}"></span>/mo
-      </span></span></label>`;
-    });
-    return h;
   }
   function updateSavings() {
     const { d, S } = app;
@@ -1867,6 +2149,7 @@
         x.hidden = x.dataset.show !== line.mode;
       });
       el.querySelector("[data-out]").textContent = `= ${fmt(b.amt[key] ?? 0)}/mo`;
+      el.querySelector("[data-rest]").textContent = `${fmt(b.amt[key] ?? 0)}/mo`;
       const note = [];
       const sv = d.p.savings.find((x) => `sav:${x.id}` === key);
       if (sv) {
@@ -1880,34 +2163,336 @@
       }
       el.querySelector("[data-note]").textContent = note.join(" \xB7 ");
     });
-    if (d.emergency.length) {
-      const names = d.funds.map((f) => f.name);
-      $("em-note").textContent = names.length ? `${fmt(b.emergency)}/mo is paid from ${names.join(" and ")}, not the monthly budget. Whatever the fund can't cover comes out of that month (see Spending over time).` : "No emergency fund in Settings \u203A Savings & income, so these count as monthly spending.";
-    }
+    const fundIn = sum(d.funds.map((f) => b.amt[`sav:${f.id}`] ?? 0));
+    $in("em-amt").placeholder = String(Math.round(fundIn));
+    const names = d.funds.map((f) => f.name).join(" and ");
+    const change = fundIn - b.emergency;
+    $("em-note").textContent = d.funds.length ? `Paid from ${names}, not the monthly budget. ${fmt(fundIn)}/mo goes in, so it ${Math.abs(change) < 0.5 ? "holds steady" : change > 0 ? `grows ${fmt(change)}/mo` : `shrinks ${fmt(-change)}/mo`}. Empty = the same as what goes in. Whatever the fund can't cover comes out of that month.` : "No emergency fund in Settings \u203A Savings & income, so this counts as monthly spending.";
   }
-  function updateStrip() {
-    const { d, S } = app;
-    const st = S.st;
-    const b = budget(d, st);
-    $("s-inc").textContent = fmt(b.income);
-    $("s-inc-note").textContent = `${d.partners.map((x) => x.name).join(" + ") || "Household"}, net`;
-    $("s-sp").textContent = fmt(b.spend);
-    const extras = [...d.annual, ...d.oneTime].filter((i) => !d.cats[i].tax && st.on[d.cats[i].name]).map((i) => `incl. ${d.cats[i].name.toLowerCase()}`);
-    $("s-sp-note").textContent = [b.credits ? "after credits" : "regular categories", ...extras].join(" \xB7 ");
-    $("s-sv").textContent = fmt(b.savings + b.investing);
+
+  // src/ui/strip.ts
+  function buildStrip() {
+    const host = $("strips");
+    host.addEventListener("change", (e) => {
+      const el = e.target;
+      const view2 = stripView();
+      if (el.dataset.cmp !== void 0) view2.cmp = el.value || null;
+      if (el.dataset.add !== void 0 && el.value) view2.rows.push(el.value);
+      view2.save();
+      refreshStrip();
+    });
+    host.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-rm]");
+      if (!b) return;
+      const view2 = stripView();
+      view2.rows.splice(+b.dataset.rm, 1);
+      view2.save();
+      refreshStrip();
+    });
+    onChange(refreshStrip);
+    refreshStrip();
+  }
+  function refreshStrip() {
+    const d = app.d;
+    const list = savedBudgets();
+    const view2 = stripView();
+    view2.rows = view2.rows.filter((id) => id === CURRENT || list.some((b) => b.id === id));
+    if (view2.cmp && !list.some((b) => b.id === view2.cmp)) view2.cmp = null;
+    const actual = budget(d, app.defs.st);
+    const planOf = (id) => {
+      if (id === CURRENT) return ["Current edits in Budgeting", app.S.st];
+      const b = list.find((x) => x.id === id);
+      return [`Budget \u201C${b.name}\u201D`, rebaseBudget(app.defs.st, b.st, b.base)];
+    };
+    const cmpSel = list.length ? `<label class="eyebrow" for="strip-cmp">Compare with</label><select
+    id="strip-cmp" class="cmp-sel" data-cmp><option value="">Choose a budget</option>${list.map((b) => `<option value="${esc(b.id)}"${b.id === view2.cmp ? " selected" : ""}>${esc(b.name)}</option>`).join("")}</select>` : "";
+    let h = `<div class="strip-head"><span class="eyebrow">Last ${d.n} months \xB7 actual</span><span
+    class="small muted">from your transactions</span></div>` + row(actual, "actual", view2.cmp ? vsTile(actual, planOf(view2.cmp)[1], cmpSel) : list.length ? `<div class="vs">${cmpSel}<span class="small muted">to see if you were over
+            or under it</span></div>` : "");
+    view2.rows.forEach((id, i) => {
+      const [name, st] = planOf(id);
+      const b = budget(d, st);
+      h += `<div class="strip-head plan"><span class="eyebrow">${esc(name)} \xB7 planned</span><button
+      class="btn sm" type="button" data-rm="${i}" aria-label="Hide ${esc(name)}">\xD7</button></div>` + row(b, "plan", vsTile(actual, st, "", true));
+    });
+    const options = [
+      ...view2.rows.includes(CURRENT) ? [] : [[CURRENT, "Current edits"]],
+      ...list.filter((b) => !view2.rows.includes(b.id)).map((b) => [b.id, b.name])
+    ];
+    if (list.length && options.length) {
+      h += `<div class="strip-add"><select class="cmp-sel" data-add aria-label="Show a budget"><option
+      value="">+ Show a budget</option>${options.map(([v, n]) => `<option value="${esc(v)}">${esc(n)}</option>`).join("")}</select></div>`;
+    }
+    $("strips").innerHTML = h;
+  }
+  var CURRENT = "__current";
+  function outgo(b) {
+    return b.spend + b.annual;
+  }
+  function row(b, cls, extra) {
+    const d = app.d;
     const parts = [];
     if (d.children.length) parts.push("529s");
     d.p.savings.forEach((s) => parts.push(s.name));
     if (b.investing) parts.push("investing");
-    $("s-sv-note").textContent = parts.join(" + ") || "none set";
-    const taxCats = [...d.annual, ...d.oneTime].filter((i) => d.cats[i].tax && st.on[d.cats[i].name]);
-    $("s-tx").textContent = taxCats.length ? fmt(b.tax) : "off";
-    const nested = taxCats.flatMap((i) => d.offsetsOf(d.cats[i].name)).filter((c) => st.on[d.cats[c].name]);
-    $("s-tx-note").textContent = (taxCats.length ? taxCats.map((i) => d.cats[i].name.toLowerCase()).join(" + ") : "none set aside") + (nested.length ? `, after ${nested.map((c) => d.cats[c].name.toLowerCase()).join(", ")}` : "");
-    const L = $("s-left");
-    L.textContent = fmt(b.left);
-    L.className = `v ${b.left < 0 ? "neg" : "pos"}`;
-    $("s-left-yr").textContent = `${b.left < 0 ? "short " : ""}${fmt(Math.abs(b.left) * 12)} over a year`;
+    const tile = (label2, v, note, more = "") => `<div${more}><span
+    class="eyebrow">${label2}</span><span class="v">${v}</span><span class="small muted">${note}</span></div>`;
+    return `<div class="strip ${cls}${extra ? " with-vs" : ""}">` + tile(
+      "Take-home income",
+      fmt(b.income),
+      `${esc(d.partners.map((x) => x.name).join(" + ") || "Household")}, net`
+    ) + tile("Spending", fmt(b.spend), b.credits ? "after credits" : "regular categories") + tile("Savings", fmt(b.savings + b.investing), esc(parts.join(" + ") || "none set")) + tile("Annual expenses", fmt(b.annual), `${fmt(b.annual * 12)}/yr`) + tile(
+      "Left over each month",
+      `<span class="${b.left < 0 ? "neg" : "pos"}">${fmt(b.left)}</span>`,
+      `${b.left < 0 ? "short " : ""}${fmt(Math.abs(b.left) * 12)} over a year`,
+      ' class="result"'
+    ) + extra + "</div>";
+  }
+  function vsTile(actual, st, head, plan = false) {
+    const p = outgo(budget(app.d, st));
+    const diff = outgo(actual) - p;
+    const pct = p ? Math.round(Math.abs(diff) / p * 100) : 0;
+    const same2 = Math.abs(diff) < 0.5;
+    const word = same2 ? "right on" : diff > 0 ? "over" : "under";
+    return `<div class="vs ${same2 ? "" : diff > 0 ? "over" : "under"}">${head || `<span class="eyebrow">${plan ? `Last ${app.d.n} months vs this` : "vs budget"}</span>`}<span
+      class="v">${same2 ? "\u2013" : `${fmt(Math.abs(diff))} ${word}`}</span><span class="small">${same2 ? "spending matched it" : `${pct}% ${word} on spending + annual, per month`}</span></div>`;
+  }
+
+  // src/ui/budgets.ts
+  function savedBudgets() {
+    return state.list;
+  }
+  function stripView() {
+    state.view ?? (state.view = { cmp: null, rows: [] });
+    return Object.assign(state.view, { save: () => send(
+      "PUT",
+      "/api/state/budgets",
+      { ...state, view: { cmp: state.view.cmp, rows: state.view.rows } }
+    ).catch(() => {
+    }) });
+  }
+  async function buildBudgets() {
+    const saved2 = await get("/api/state");
+    state = {
+      list: saved2.budgets?.list ?? [],
+      active: saved2.budgets?.active ?? null,
+      view: saved2.budgets?.view ?? { cmp: null, rows: [] }
+    };
+    wireBar();
+    onChange(touch);
+    renderBar();
+    refreshCompare();
+  }
+  var state = { list: [], active: null };
+  var pendingSwitch = null;
+  var pendingDel = false;
+  var pendingReset = false;
+  var stOf = (b) => rebaseBudget(app.defs.st, b.st, b.base);
+  var active = () => state.list.find((b) => b.id === state.active) ?? null;
+  var newId = () => `b${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  function dirtyFrom(b) {
+    return diffBudget(app.d, stOf(b), app.S.st).length > 0;
+  }
+  function persist() {
+    send("PUT", "/api/state/budgets", {
+      ...state,
+      view: state.view && { cmp: state.view.cmp, rows: state.view.rows }
+    }).catch(() => {
+    });
+    refreshCompare();
+    refreshStrip();
+  }
+  function apply(st) {
+    app.S.st = clone(st);
+    fillPlanner();
+    changed();
+  }
+  function touch() {
+    pendingSwitch = null;
+    pendingDel = false;
+    pendingReset = false;
+    renderBar();
+  }
+  function renderBar() {
+    const a = active();
+    const dirty2 = a ? dirtyFrom(a) : null;
+    const tabs = $("bg-tabs");
+    tabs.innerHTML = state.list.length ? state.list.map((b) => `<button type="button" class="chip"
+      data-id="${esc(b.id)}" aria-pressed="${b.id === state.active}">${esc(b.name)}${b.id === state.active && dirty2 ? " \u2022" : ""}</button>`).join("") : '<span class="small muted">No saved budgets yet. Name this one and save it.</span>';
+    $("bg-state").textContent = pendingSwitch ? "Unsaved changes will be lost. Click the budget again to switch." : a ? dirty2 ? `Unsaved changes to "${a.name}"` : `Showing "${a.name}"` : "Not saved as a budget yet";
+    const up = $("bg-update");
+    up.hidden = !a;
+    up.textContent = a ? `Update "${a.name}"` : "Update";
+    up.disabled = !!a && !dirty2;
+    const del = $("bg-del");
+    del.hidden = !a;
+    del.textContent = pendingDel ? "Click again to delete" : "Delete";
+    $("bg-reset").textContent = pendingReset ? "Click again to start over" : "Start from averages";
+    tabs.querySelectorAll("button").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.dataset.id;
+        if (id === state.active) return;
+        const cur = active();
+        const dirtyNow = cur ? dirtyFrom(cur) : !state.list.some((b) => !dirtyFrom(b)) && diffBudget(app.d, app.defs.st, app.S.st).length > 0;
+        if (dirtyNow && pendingSwitch !== id) {
+          pendingSwitch = id;
+          renderBar();
+          return;
+        }
+        pendingSwitch = null;
+        state.active = id;
+        persist();
+        apply(stOf(state.list.find((b) => b.id === id)));
+      });
+    });
+  }
+  function wireBar() {
+    const bar = $("budgets");
+    bar.addEventListener("input", (e) => e.stopPropagation());
+    $("bg-save").addEventListener("click", () => {
+      const inp = $in("bg-name");
+      const name = inp.value.trim() || `Budget ${state.list.length + 1}`;
+      const b = {
+        id: newId(),
+        name,
+        saved: (/* @__PURE__ */ new Date()).toISOString(),
+        st: clone(app.S.st),
+        base: clone(app.defs.st)
+      };
+      state.list.push(b);
+      state.active = b.id;
+      inp.value = "";
+      persist();
+      renderBar();
+    });
+    $in("bg-name").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") $("bg-save").click();
+    });
+    $("bg-update").addEventListener("click", () => {
+      const a = active();
+      if (!a) return;
+      Object.assign(a, {
+        st: clone(app.S.st),
+        base: clone(app.defs.st),
+        saved: (/* @__PURE__ */ new Date()).toISOString()
+      });
+      persist();
+      renderBar();
+    });
+    $("bg-del").addEventListener("click", () => {
+      if (!pendingDel) {
+        pendingDel = true;
+        renderBar();
+        return;
+      }
+      pendingDel = false;
+      state.list = state.list.filter((b) => b.id !== state.active);
+      state.active = null;
+      persist();
+      renderBar();
+    });
+    $("bg-reset").addEventListener("click", () => {
+      if (!pendingReset) {
+        pendingReset = true;
+        renderBar();
+        return;
+      }
+      pendingReset = false;
+      state.active = null;
+      persist();
+      apply(app.defs.st);
+    });
+  }
+
+  // src/ui/presets.ts
+  var SAVE_DELAY_MS2 = 400;
+  async function loadPresets() {
+    const saved2 = await get("/api/state");
+    const a = app.d.p.assumptions;
+    const fromConfig = (x) => Object.values(x).map((p) => ({ name: p.name, ret: p.return_pct, inf: p.inflation_pct }));
+    lists = {
+      college: saved2.presets?.college ?? fromConfig(a.college.presets),
+      retire: saved2.presets?.retire ?? fromConfig(a.retirement.presets)
+    };
+  }
+  function presetPicker(host, kind, current2, apply3) {
+    const ed = { host, kind, current: current2, apply: apply3, editing: false };
+    editors.push(ed);
+    host.addEventListener("click", (e) => {
+      const t = e.target.closest("button");
+      if (!t) return;
+      const list = lists[kind];
+      const i = +t.closest("[data-i]")?.dataset.i;
+      if (t.dataset.pi !== void 0) {
+        const p = list[+t.dataset.pi];
+        apply3(p.ret, p.inf);
+      } else if (t.dataset.pe !== void 0) {
+        ed.editing = true;
+        render(ed);
+      } else if (t.dataset.pd !== void 0) {
+        ed.editing = false;
+        renderAll(kind);
+      } else if (t.dataset.px !== void 0) {
+        list.splice(i, 1);
+        save();
+        renderAll(kind);
+      } else if (t.dataset.pa !== void 0) {
+        const [ret, inf] = current2();
+        list.push({ name: `Preset ${list.length + 1}`, ret, inf });
+        save();
+        renderAll(kind);
+        const rows = host.querySelectorAll(".pr-row");
+        rows[rows.length - 1]?.querySelector("input")?.select();
+      }
+    });
+    host.addEventListener("input", (e) => {
+      const el = e.target;
+      const row2 = el.closest("[data-i]");
+      if (!row2 || !el.dataset.pf) return;
+      const p = lists[kind][+row2.dataset.i];
+      if (el.dataset.pf === "name") p.name = el.value;
+      else p[el.dataset.pf] = parseFloat(el.value) || 0;
+      save();
+      editors.filter((x) => x.kind === kind && x !== ed).forEach(render);
+    });
+    render(ed);
+    return () => {
+      if (!ed.editing) render(ed);
+    };
+  }
+  var lists = { college: [], retire: [] };
+  var editors = [];
+  var timer2 = 0;
+  function save() {
+    if (timer2) window.clearTimeout(timer2);
+    timer2 = window.setTimeout(() => {
+      timer2 = 0;
+      send("PUT", "/api/state/presets", lists).catch(() => {
+      });
+    }, SAVE_DELAY_MS2);
+  }
+  function renderAll(kind) {
+    editors.filter((x) => x.kind === kind).forEach(render);
+  }
+  function render(ed) {
+    const list = lists[ed.kind];
+    if (ed.editing) {
+      ed.host.innerHTML = `<div class="pr-edit">${list.map((p, i) => `<div class="pr-row"
+      data-i="${i}"><input type="text" data-pf="name" value="${esc(p.name)}"
+      aria-label="Preset name"><label>return <input class="amt" type="number" step="0.5"
+      data-pf="ret" value="${p.ret}" aria-label="${esc(p.name)} return">%</label><label>inflation
+      <input class="amt" type="number" step="0.25" data-pf="inf" value="${p.inf}"
+      aria-label="${esc(p.name)} inflation">%</label><button class="btn sm" type="button" data-px
+      aria-label="Remove ${esc(p.name)}">\xD7</button></div>`).join("") || '<p class="small muted">No presets.</p>'}<div class="btns"><button class="btn sm add"
+      type="button" data-pa>+ Add preset</button><button class="btn sm primary" type="button"
+      data-pd>Done</button></div></div>`;
+      return;
+    }
+    const [ret, inf] = ed.current();
+    ed.host.innerHTML = `<div class="chips">${list.map((p, i) => `<button type="button" class="chip"
+    data-pi="${i}" aria-pressed="${p.ret === ret && p.inf === inf}">${esc(p.name)} <span
+    class="num">${p.ret}% / ${p.inf}%</span></button>`).join("")}<button class="btn sm" type="button"
+    data-pe>${list.length ? "Edit presets" : "Add presets"}</button></div>`;
   }
 
   // src/ui/college.ts
@@ -1921,20 +2506,19 @@
       const id = esc(c.id);
       return `<div class="panel kid" id="kid-${id}">
       <div><h3>${esc(c.name)}</h3><p class="small muted">age ${c.age} \xB7 graduates high school ${esc(tl.graduation)} \xB7 529 today ${fmt(c.college_529.balance)}${c.note ? ` \xB7 ${esc(c.note)}` : ""}</p></div>
-      <div class="ctl"><label for="kc-${id}">Monthly contribution</label><input class="amt"
-        id="kc-${id}" type="number" step="50" inputmode="decimal"></div>
+      <div class="row"><span>Monthly contribution</span><span><span class="num" id="kc-${id}"></span>
+        <a class="small" href="#budget">set in Budgeting \u203A Savings</a></span></div>
       <div style="display:grid;gap:6px"><span class="eyebrow">School</span><div class="seg"
         data-f="school">${Object.entries(col.schools).map(([key, s]) => `<button type="button" data-v="${esc(key)}">${esc(s.name)}</button>`).join("")}</div></div>
       <div class="ctl"><label for="ky-${id}">Cost per year today</label><input class="amt"
         id="ky-${id}" type="number" step="1000" inputmode="decimal"></div>
       <fieldset class="scen"><legend class="eyebrow">Return &amp; college cost inflation</legend>
-        <div class="scen-opts">${Object.entries(col.presets).map(([key, p]) => `<label><input
-          type="checkbox" data-preset="${esc(key)}">${esc(p.name)} <span class="small muted">${p.return_pct}% / ${p.inflation_pct}%</span></label>`).join("")}</div>
+        <div class="presets" id="kp-${id}"></div>
         <div class="ctl"><label for="kr-${id}">Investment return</label><span class="num"
           id="krv-${id}"></span><input type="range" id="kr-${id}" min="0" max="10" step="0.5"></div>
         <div class="ctl"><label for="ki-${id}">College cost inflation</label><span class="num"
           id="kiv-${id}"></span><input type="range" id="ki-${id}" min="0" max="8" step="0.5"></div>
-        <span class="small muted">Tick a preset to set both sliders, then fine-tune.</span>
+        <span class="small muted">Pick a preset to set both sliders, then fine-tune.</span>
       </fieldset>
       <div class="out" id="ko-${id}"></div>
     </div>`;
@@ -1942,11 +2526,6 @@
     d.children.forEach((c) => {
       const cs = () => app.S.cs[c.id];
       const card = $(`kid-${c.id}`);
-      $in(`kc-${c.id}`).addEventListener("input", (e) => {
-        app.S.st.sav[`529:${c.id}`].amt = num(e.target);
-        fillPlanner();
-        changed();
-      });
       $in(`ky-${c.id}`).addEventListener("input", (e) => {
         cs().cost = num(e.target);
         changed();
@@ -1966,30 +2545,25 @@
           changed();
         });
       });
-      card.querySelectorAll("[data-preset]").forEach((cb) => {
-        cb.addEventListener("change", () => {
-          const p = col.presets[cb.dataset.preset];
-          cs().ret = p.return_pct;
-          cs().inf = p.inflation_pct;
-          changed();
-        });
-      });
+      marks.push(presetPicker($(`kp-${c.id}`), "college", () => [cs().ret, cs().inf], (ret, inf) => {
+        cs().ret = ret;
+        cs().inf = inf;
+        changed();
+      }));
     });
     onChange(updateCollege);
     updateCollege();
   }
+  var marks = [];
   function updateCollege() {
     const d = app.d;
     const col = d.p.assumptions.college;
+    marks.forEach((mark) => mark());
     d.children.forEach((c, k) => {
       const s = app.S.cs[c.id];
-      const pct = app.S.st.sav[`529:${c.id}`]?.mode === "pct";
       const m = budget(d, app.S.st).amt[`529:${c.id}`] ?? 0;
       const card = $(`kid-${c.id}`);
-      const kc = $in(`kc-${c.id}`);
-      kc.disabled = pct;
-      kc.title = pct ? "A share of the left-over: change it in the planner's Savings box" : "";
-      if (document.activeElement !== kc) kc.value = String(Math.round(m));
+      $(`kc-${c.id}`).textContent = `${fmt(m)}/mo`;
       const ky = $in(`ky-${c.id}`);
       if (document.activeElement !== ky) ky.value = String(s.cost);
       $in(`kr-${c.id}`).value = String(s.ret);
@@ -1998,10 +2572,6 @@
       $(`kiv-${c.id}`).textContent = `${s.inf}%`;
       card.querySelectorAll(".seg button").forEach((b) => {
         b.setAttribute("aria-pressed", String(b.dataset.v === s.school));
-      });
-      card.querySelectorAll("[data-preset]").forEach((cb) => {
-        const p = col.presets[cb.dataset.preset];
-        cb.checked = p.return_pct === s.ret && p.inflation_pct === s.inf;
       });
       const x = kidCalc(d, app.S, k);
       const cov = Math.round(x.pct * 100);
@@ -2131,7 +2701,7 @@
       const left = r.inc - r.out - r.sav;
       const k = deflator(d, S, r.y);
       const ages = d.partners.map((p) => `${p.name} ${Math.floor(p.age + r.y - d.todayYear)}`).join(", ");
-      const tip = `<b>${r.y}</b> \xB7 ${esc(ages)}<br>${r.s.kids} of ${d.children.length} children at home${r.s.ret ? " \xB7 retired" : ""}<br>Living ${fmt(r.s.living * k)}` + (r.s.tax ? `<br>Taxes set aside ${fmt(r.s.tax * k)}` : "") + (r.s.health ? `<br>Health insurance ${fmt(r.s.health * k)}` : "") + (r.s.emergency ? `<br>Emergency costs ${fmt(r.s.emergency * k)} (from the fund)` : "") + (r.s.short ? `<br>Emergency costs the fund can't cover ${fmt(r.s.short * k)}` : "") + (r.sav ? `<br>Savings ${fmt(r.sav)}` : "") + `<br>Income ${fmt(r.inc)}<br><b>${left >= 0 ? "Left over" : "Short"} ${fmt(Math.abs(left))}/mo</b>`;
+      const tip = `<b>${r.y}</b> \xB7 ${esc(ages)}<br>${r.s.kids} of ${d.children.length} children at home${r.s.ret ? " \xB7 retired" : ""}<br>Living ${fmt(r.s.living * k)}` + (r.s.annual ? `<br>Annual expenses ${fmt(r.s.annual * k)}` : "") + (r.s.health ? `<br>Health insurance ${fmt(r.s.health * k)}` : "") + (r.s.emergency ? `<br>Emergency costs ${fmt(r.s.emergency * k)} (from the fund)` : "") + (r.s.short ? `<br>Emergency costs the fund can't cover ${fmt(r.s.short * k)}` : "") + (r.sav ? `<br>Savings ${fmt(r.sav)}` : "") + `<br>Income ${fmt(r.inc)}<br><b>${left >= 0 ? "Left over" : "Short"} ${fmt(Math.abs(left))}/mo</b>`;
       g += `<g class="m" data-tip="${tip.replace(/"/g, "&quot;")}"><rect x="${bx}" y="${T + ph - h1}" width="${w}" height="${Math.max(h1, 0)}" rx="2" class="sel"/>` + (h2 > 0.5 ? `<rect x="${bx}" y="${T + ph - h1 - h2}" width="${w}" height="${Math.max(h2 - 2, 0.5)}" rx="2" style="fill:var(--save)"/>` : "") + `<rect class="hit" x="${L + i * bw}" y="${T}" width="${bw}" height="${ph}"/>` + (r.y % 5 === 0 || i === 0 ? `<text x="${L + i * bw + bw / 2}" y="${H - 10}" text-anchor="middle">${r.y}</text>` : "") + "</g>";
       const x0 = L + i * bw;
       path += `${i ? "L" : "M"}${x0},${y(r.inc)}L${x0 + bw},${y(r.inc)}`;
@@ -2153,13 +2723,13 @@
     if (ssDone > RY) stages.push([ssDone, "All Social Security started"]);
     stages.sort((a, b) => a[0] - b[0]);
     const dl = S.fs.nominal ? " (with inflation)" : " (today's $)";
-    $("f-phases").innerHTML = `<tr><th>Stage</th><th>Year</th><th>Ages</th><th>Living costs</th><th>Taxes</th><th>Health ins.</th><th>Savings</th><th>Total out</th><th>Income${dl}</th><th>Left over</th></tr>` + stages.map(([yr, lbl]) => {
+    $("f-phases").innerHTML = `<tr><th>Stage</th><th>Year</th><th>Ages</th><th>Living costs</th><th>Annual expenses</th><th>Health ins.</th><th>Savings</th><th>Total out</th><th>Income${dl}</th><th>Left over</th></tr>` + stages.map(([yr, lbl]) => {
       const s = spendAt(d, S, yr);
       const k = deflator(d, S, yr);
       const inc = incomeAt(d, S, yr) * k;
       const out = (s.spend + s.savings) * k;
       const df = inc - out;
-      return `<tr><td>${esc(lbl)}</td><td>${yr}</td><td>${d.partners.map((p) => Math.floor(p.age + yr - d.todayYear)).join(" / ")}</td><td>${fmt(s.living * k)}</td><td>${fmt(s.tax * k)}</td><td>${fmt(s.health * k)}</td><td>${fmt(s.savings * k)}</td><td>${fmt(out)}</td><td>${fmt(inc)}</td><td class="${df >= 0 ? "pos" : "neg"}">${df >= 0 ? "+" : ""}${fmt(df)}</td></tr>`;
+      return `<tr><td>${esc(lbl)}</td><td>${yr}</td><td>${d.partners.map((p) => Math.floor(p.age + yr - d.todayYear)).join(" / ")}</td><td>${fmt(s.living * k)}</td><td>${fmt(s.annual * k)}</td><td>${fmt(s.health * k)}</td><td>${fmt(s.savings * k)}</td><td>${fmt(out)}</td><td>${fmt(inc)}</td><td class="${df >= 0 ? "pos" : "neg"}">${df >= 0 ? "+" : ""}${fmt(df)}</td></tr>`;
     }).join("");
     drawBalances(stages);
   }
@@ -2194,9 +2764,9 @@
   var TOPICS = [
     ["h-start", "Quick start"],
     ["h-setup", "Setting up"],
-    ["h-scen", "Scenarios & sharing"],
-    ["h-planner", "Monthly planner"],
-    ["h-explore", "Explore spending"],
+    ["h-explore", "Spending"],
+    ["h-planner", "Budgeting"],
+    ["h-scen", "Sharing"],
     ["h-cat", "Categorizing"],
     ["h-college", "College 529s"],
     ["h-retire", "Retirement"],
@@ -2207,15 +2777,14 @@
   var BODY = `
 <h3 id="h-start">Quick start</h3>
 <ol>
-  <li><b>Read the strip at the top.</b> It's one month on paper: take-home income, minus spending,
-    savings and taxes, equals what's left over.</li>
-  <li><b>Try a change in the Monthly planner.</b> Every category starts at its average. Type a new
-    number and the strip updates. Changed boxes turn blue.</li>
-  <li><b>Save it as a scenario.</b> Name it in the Scenarios bar and click <i>Save as new</i>. Make
-    another and use <i>Compare</i>.</li>
+  <li><b>Look at your spending.</b> <i>Spending</i> shows what your transactions say: each
+    category's monthly average, lowest and highest month, and every transaction behind it.</li>
+  <li><b>Make a budget.</b> In <i>Budgeting</i> every category starts at its average. Type a new
+    number and the strip at the top updates. Changed boxes turn blue.</li>
+  <li><b>Save it.</b> Name it in the Budgets bar and click <i>Save as new</i>. Pick any saved
+    budget (or the average) in the Compare column to see the difference line by line.</li>
   <li><b>Look at the long view.</b> <i>Retirement</i> shows income at each retirement age.
     <i>Spending over time</i> shows how costs change as children leave home.</li>
-  <li><b>Dig in.</b> <i>Explore spending</i> shows every transaction behind a category.</li>
 </ol>
 <p class="note">Your changes are saved in the plan folder on this computer. Nothing is sent
   anywhere.</p>
@@ -2241,48 +2810,47 @@
   folder (or upload them under Data sources). New exports with the same layout are picked up
   automatically if the source's file pattern matches them.</p>
 
-<h3 id="h-scen">Scenarios &amp; sharing</h3>
-<p>A scenario is a named snapshot of all settings: the planner, the 529 cards, Retirement and
-  Spending over time.</p>
-<table class="help-table">
-  <tr><td>Save as new</td><td>Saves the current settings under the name you typed.</td></tr>
-  <tr><td>Tabs</td><td>Click one to load it. A <b>\u2022</b> means it has unsaved changes.</td></tr>
-  <tr><td>Update / Delete</td><td>Save changes into, or remove, the scenario that's showing.</td></tr>
-  <tr><td>Compare</td><td>One card each for the monthly budget, the 529s and retirement: what
-    changed and its effect, green if better, red if worse. <i>Details</i> shows everything.</td></tr>
-  <tr><td>Reset everything</td><td>Back to the starting values from the config. Saved scenarios
-    are kept.</td></tr>
-  <tr><td>Share</td><td>Copy a share code (or save a file) and send it; the other person pastes it
-    under <i>Receive</i>. A scenario sent back after edits updates the original.</td></tr>
-</table>
-<p class="note">Share codes contain your planner amounts and retirement inputs (not
-  transactions). Anyone with a code can read those numbers.</p>
-<p>To give someone <b>everything</b> (settings, data, scenarios), use Settings \u203A <i>Share plan</i>
+<h3 id="h-scen">Sharing</h3>
+<p>To give someone <b>everything</b> (settings, data, budgets), use Settings \u203A <i>Share plan</i>
   \u203A <i>Save plan as a file</i>. They open it from the Mac app's menu-bar icon \u203A <i>Open Plan
   File\u2026</i>. That file contains your real transactions: share it privately.</p>
 
-<h3 id="h-planner">Monthly planner</h3>
+<h3 id="h-explore">Spending</h3>
 <ul>
-  <li><b>Categories</b> start at their average, with the lowest and highest months beside them.</li>
-  <li><b>Credits</b> (reimbursements, refunds) can sit under the category they offset, or below
-    the total. Tick them to subtract them.</li>
-  <li><b>Savings</b>: each 529, savings account, emergency fund and investment adds either a
-    fixed <b>$/mo</b> or <b>% left</b>: a share of what is left each month after spending, taxes
-    and the fixed amounts, kept between an optional min and max. A savings account with a max
-    balance sends the rest to an investment once it's full; the note under it says when.</li>
-  <li><b>Annual expenses</b> (taxes, insurance), <b>1-time purchases</b> and <b>emergency fund
-    costs</b> are kept out of the averages. Tick one to count it. Emergency fund costs are paid
-    from the emergency fund instead of the monthly budget; only what the fund can't cover comes
-    out of the month.</li>
-  <li><i>Try 10% less on flexible spending</i> trims the categories marked flexible.</li>
-</ul>
-
-<h3 id="h-explore">Explore spending</h3>
-<ul>
-  <li><b>Spending / Credits / Both</b> chooses what you're looking at.</li>
-  <li>Click a category chip to focus on it, or a month to filter the transactions.</li>
+  <li>The chart shows each month. Click a month to filter the transactions.</li>
+  <li><b>Spending / Credits / Both</b> chooses the rows in the table. Each row shows the monthly
+    average, the lowest and the highest month. Click a category to see it in the chart.</li>
+  <li><b>Credits</b> sit under the category they offset (in <i>Both</i>), or in their own list.
+    Annual, 1-time and emergency costs, and savings transfers, have a tick box: ticked rows count
+    in the total.</li>
   <li><b>Recategorize</b> (above the transactions) turns on editing: click a transaction to change
     its category or make a rule from it. It's off by default so nothing changes by accident.</li>
+</ul>
+
+<h3 id="h-planner">Budgeting</h3>
+<table class="help-table">
+  <tr><td>Budgets bar</td><td>Save the current budget under a name, click one to load it (a
+    <b>\u2022</b> means unsaved changes), update or delete it, or start from the averages again. A
+    budget holds only Budgeting: categories, income, savings, annual expenses and emergency costs.
+    529 cards and Retirement are not part of it.</td></tr>
+  <tr><td>Planned / mo</td><td>Your budget. Starts at each category's average.</td></tr>
+  <tr><td>Compare</td><td>Pick the average or any saved budget; <i>Difference</i> is planned
+    minus compare (green is better).</td></tr>
+  <tr><td>Below the table</td><td>Net spending, annual expenses, emergency fund costs, each savings
+    line and the monthly total of spending plus savings.</td></tr>
+</table>
+<ul>
+  <li><b>Savings</b>: each 529, savings account, emergency fund and investment adds a fixed
+    <b>$/mo</b>, <b>% left</b> (a share of what is left after spending, annual expenses and the
+    fixed amounts, kept between an optional min and max) or <b>rest</b> (whatever is still left,
+    split evenly between every "rest" line). A savings account with a max balance sends the rest
+    to an investment once it's full; the note under it says when.</li>
+  <li><b>Annual expenses</b>: add as many as you like (+ Add, a name and a yearly amount; \xD7 to
+    remove). Their total \xF7 12 counts each month.</li>
+  <li><b>Emergency fund costs</b>: what you expect to take out of the emergency fund each month.
+    Empty means the same as what goes in, so the fund holds steady; more makes it shrink, less
+    makes it grow. With no emergency fund it counts as spending.</li>
+  <li><i>Try 10% less on flexible spending</i> trims the categories marked flexible.</li>
 </ul>
 
 <h3 id="h-cat">Categorizing</h3>
@@ -2344,7 +2912,7 @@
   function buildHelp() {
     const root = document.getElementById("help");
     root.innerHTML = `<div class="sec-head"><h2 id="help-title">Help</h2><a class="btn"
-      href="#planner" style="text-decoration:none">Back to the budget</a></div>
+      href="#budget" style="text-decoration:none">Back to the budget</a></div>
     <nav class="help-toc panel" aria-label="Help topics"><span class="eyebrow">Topics</span>
       <div class="chips">${TOPICS.map(([id, l]) => `<button class="chip" type="button"
         data-go="${id}">${l}</button>`).join("")}</div></nav>
@@ -2392,6 +2960,7 @@
     document.querySelectorAll("[data-r]").forEach((el) => {
       const v = getR(el.dataset.r);
       if (el.type === "checkbox") el.checked = !!v;
+      else if (el.dataset.r.startsWith("draw|")) el.value = String(v ?? rs.wd);
       else el.value = v == null ? "" : String(v);
     });
     document.querySelectorAll("select[data-claim]").forEach((el) => {
@@ -2401,6 +2970,8 @@
   }
   var lo = 55;
   var hi = 70;
+  var markPreset = () => {
+  };
   function buildOthers() {
     const d = app.d;
     const box = $("ra-others");
@@ -2444,6 +3015,7 @@
   function partColor(x) {
     if (x.kind === "pension") return "--r1";
     if (x.kind === "investment") return "--r5";
+    if (x.kind === "savings") return "--onetime";
     if (x.kind === "ss") return "--r4";
     return x.partner === app.d.primary.id ? "--r2" : "--r3";
   }
@@ -2461,6 +3033,11 @@
   }
   function splitPath(path) {
     return path.split("|");
+  }
+  function drawCtl(key) {
+    return `<div class="ctl"><label>Yearly withdrawal <span class="small muted">for living
+    expenses</span></label><span class="num" data-drawv="${esc(key)}"></span><input type="range"
+    min="2" max="8" step="0.25" data-r="draw|${esc(key)}" aria-label="Yearly withdrawal"></div>`;
   }
   function numInput(path, label2, step = 50, wide = false) {
     return `<div class="row"><label>${esc(label2)}</label><input class="amt" type="number" step="${step}" inputmode="decimal" data-r="${esc(path)}"${wide ? ' style="width:120px"' : ""}></div>`;
@@ -2482,15 +3059,24 @@
       p.accounts.forEach((ac, i) => {
         const key = `${p.id}:${i}`;
         h += `<div class="panel" data-pane="acct|${esc(key)}|on"><label class="toggle"><input
-        type="checkbox" data-r="acct|${esc(key)}|on"><h3>${esc(ac.name)} <span class="small muted">${esc(p.name)}</span></h3></label>${numInput(`acct|${key}|bal`, "Balance today", 1e3, true)}${numInput(`acct|${key}|monthly`, "Adding per month")}<p class="small muted">Grows at the
-        return rate; contributions continue until retirement.</p></div>`;
+        type="checkbox" data-r="acct|${esc(key)}|on"><h3>${esc(ac.name)} <span class="small muted">${esc(p.name)}</span></h3></label>${numInput(`acct|${key}|bal`, "Balance today", 1e3, true)}${numInput(`acct|${key}|monthly`, "Adding per month")}${drawCtl(`acct:${key}`)}<p
+        class="small muted">Grows at the return rate; contributions continue until retirement.</p></div>`;
       });
     });
     d.p.investments.forEach((v) => {
       h += `<div class="panel" id="pn-inv-${esc(v.id)}"><h3>${esc(v.name)}</h3>${numInput(`inv|${v.id}|bal`, "Balance today", 1e3, true)}
-      <div class="row"><span>Adding per month</span><span><span class="num" id="r-ic-${esc(v.id)}"></span> <a class="small" href="#planner">set in the planner</a></span></div>
-      <div class="ctl"><label>Return on this account</label><span class="num" id="r-ir-${esc(v.id)}"></span><input type="range" min="0" max="10" step="0.5" data-r="inv|${esc(v.id)}|ret"></div>
+      <div class="row"><span>Adding per month</span><span><span class="num" id="r-ic-${esc(v.id)}"></span> <a class="small" href="#budget">set in Budgeting</a></span></div>
+      <div class="ctl"><label>Return on this account</label><span class="num" id="r-ir-${esc(v.id)}"></span><input type="range" min="0" max="10" step="0.5" data-r="inv|${esc(v.id)}|ret"></div>${drawCtl(`inv:${v.id}`)}
       <p class="small muted" id="r-inote-${esc(v.id)}"></p></div>`;
+    });
+    retireSavings(d).forEach((sv) => {
+      h += `<div class="panel" id="pn-sav-${esc(sv.id)}"><h3>${esc(sv.name)}</h3>
+      <div class="row"><span>Balance today</span><span class="num">${fmt(sv.balance)}</span></div>
+      <div class="row"><span>Adding per month</span><span><span class="num" id="r-sc-${esc(sv.id)}"></span> <a class="small" href="#budget">set in Budgeting</a></span></div>
+      <div class="row"><span>Interest</span><span class="num">${sv.return_pct}%</span></div>
+      ${drawCtl(`sav:${sv.id}`)}
+      <p class="small muted">${sv.stops_at_retirement ? "Contributions stop at retirement. " : ""}Its balance at retirement becomes monthly income at its withdrawal rate. Balance and
+        interest are set in Settings \u203A Savings &amp; income.</p></div>`;
     });
     if (d.partners.length) {
       h += `<div class="panel" data-pane="ss"><label class="toggle"><input type="checkbox"
@@ -2526,18 +3112,17 @@
         changed();
       });
     });
-    const presets = d.p.assumptions.retirement.presets;
-    $("r-scen").innerHTML = Object.entries(presets).map(([k, p]) => `<label><input type="checkbox"
-    data-rp="${esc(k)}">${esc(p.name)} <span class="small muted">${p.return_pct}% / ${p.inflation_pct}%</span></label>`).join("");
-    $("r-scen").querySelectorAll("[data-rp]").forEach((cb) => {
-      cb.addEventListener("change", () => {
-        const p = presets[cb.dataset.rp];
-        app.S.rs.ret = p.return_pct;
-        app.S.rs.inf = p.inflation_pct;
+    markPreset = presetPicker(
+      $("r-scen"),
+      "retire",
+      () => [app.S.rs.ret, app.S.rs.inf],
+      (ret, inf) => {
+        app.S.rs.ret = ret;
+        app.S.rs.inf = inf;
         fillRetire();
         changed();
-      });
-    });
+      }
+    );
     [["r-ret", "ret"], ["r-inf", "inf"], ["r-wd", "wd"]].forEach(([id, key]) => {
       $in(id).addEventListener("input", () => {
         app.S.rs[key] = +$in(id).value;
@@ -2562,20 +3147,25 @@
       const r = document.querySelector(`[data-r="raise|${CSS.escape(p.id)}"]`);
       if (r) r.value = String(rs.raise[p.id] ?? 0);
     });
-    const presets = d.p.assumptions.retirement.presets;
-    document.querySelectorAll("[data-rp]").forEach((cb) => {
-      const p = presets[cb.dataset.rp];
-      cb.checked = p.return_pct === rs.ret && p.inflation_pct === rs.inf;
+    markPreset();
+    document.querySelectorAll("[data-drawv]").forEach((el) => {
+      const key = el.dataset.drawv;
+      el.textContent = `${drawPct(rs, key)}%`;
+      const r = document.querySelector(`[data-r="draw|${CSS.escape(key)}"]`);
+      if (r && document.activeElement !== r) r.value = String(drawPct(rs, key));
+    });
+    retireSavings(d).forEach((sv) => {
+      $(`r-sc-${sv.id}`).textContent = fmt(budget(d, S.st).amt[`sav:${sv.id}`] ?? 0);
     });
     d.p.investments.forEach((v) => {
       const st = rs.inv[v.id];
       const monthly = budget(d, S.st).amt[`inv:${v.id}`] ?? 0;
       const fed = d.p.savings.filter((sv) => overflowTarget(d, sv) === v.id).map((sv) => sv.name);
-      const on = st.bal > 0 || monthly > 0 || fed.length > 0;
-      $(`pn-inv-${v.id}`).classList.toggle("pane-off", !on);
+      const on2 = st.bal > 0 || monthly > 0 || fed.length > 0;
+      $(`pn-inv-${v.id}`).classList.toggle("pane-off", !on2);
       $(`r-ic-${v.id}`).textContent = fmt(monthly);
       $(`r-ir-${v.id}`).textContent = `${st.ret}%`;
-      $(`r-inote-${v.id}`).textContent = !on ? "Off until you enter a balance here or a monthly amount in the planner." : `Its own return rate, separate from the presets.${fed.length ? ` Also gets what ${fed.join(" and ")} adds once full.` : ""}${st.ret < rs.inf ? ` At ${st.ret}% it grows slower than ${rs.inf}% inflation, so it loses buying power.` : ""} Turned into monthly income at the withdrawal rate.`;
+      $(`r-inote-${v.id}`).textContent = !on2 ? "Off until you enter a balance here or a monthly amount in Budgeting." : `Its own return rate, separate from the presets.${fed.length ? ` Also gets what ${fed.join(" and ")} adds once full.` : ""}${st.ret < rs.inf ? ` At ${st.ret}% it grows slower than ${rs.inf}% inflation, so it loses buying power.` : ""} Turned into monthly income at its withdrawal rate.`;
     });
     const R = retirementIncome(d, S, rs.age);
     const ry = retireYear(d, rs);
@@ -2586,7 +3176,7 @@
     $("ra-v").textContent = String(rs.age);
     $("ra-when").textContent = `${R.years[d.primary.id] - 1} \xB7 ${Math.round(rs.age - d.primary.age)} years from now`;
     const who = (id) => d.partners.find((p) => p.id === id)?.name ?? "";
-    const row = (x) => {
+    const row2 = (x) => {
       let sub = "";
       if (x.balance != null) {
         sub = `${fmt(x.balance)} balance \xB7 ${fmt(x.balance / Math.pow(1 + rs.inf / 100, x.yrs ?? R.yrs))} in today's $`;
@@ -2603,13 +3193,13 @@
       return `<span></span><span><b>${ok ? lbl.replace("Gap", "Surplus") : lbl}</b> <span
       class="small muted">${Math.round(c * 100)}% covered</span></span><span class="num ${ok ? "pos" : "neg"}"><b>${ok ? "+" : ""}${fmt(v - sp)}</b></span>`;
     };
-    $("r-parts").innerHTML = R.parts.map(row).join("") + `<span></span><span class="tot">Income ${staggered ? `once everyone is retired (${ry - 1})` : "at retirement"}, before tax</span><span class="num tot">${fmt(R.total)}/mo</span><span></span><span class="muted">Income tax (${S.fs.tax}%)</span><span class="num muted">(${fmt(R.total * S.fs.tax / 100)})</span><span></span><span><b>After tax</b></span><span class="num"><b>${fmt(R.total * net)}/mo</b></span>` + (R.later > 0 ? `<span></span><span><b>After tax, once all Social Security starts</b> <span
+    $("r-parts").innerHTML = R.parts.map(row2).join("") + `<span></span><span class="tot">Income ${staggered ? `once everyone is retired (${ry - 1})` : "at retirement"}, before tax</span><span class="num tot">${fmt(R.total)}/mo</span><span></span><span class="muted">Income tax (${S.fs.tax}%)</span><span class="num muted">(${fmt(R.total * S.fs.tax / 100)})</span><span></span><span><b>After tax</b></span><span class="num"><b>${fmt(R.total * net)}/mo</b></span>` + (R.later > 0 ? `<span></span><span><b>After tax, once all Social Security starts</b> <span
         class="small muted">from ${R.fullYear}</span></span><span class="num"><b>${fmt(R.full * net)}/mo</b></span>` : "") + `<span></span><span>Projected spending in retirement <span class="small muted">children
         gone, retirement changes, health insurance \xB7 today it's ${fmt(today)}</span></span><span
         class="num">${fmt(sp)}/mo</span>` + gapRow(R.later > 0 ? "Gap at retirement" : "Gap each month", R.total * net) + (R.later > 0 ? gapRow(`Gap from ${R.fullYear} on`, R.full * net) : "");
     const kinds = [];
     R.parts.forEach((x) => {
-      const lbl = x.kind === "pension" ? "Pensions" : x.kind === "investment" ? "Investments" : x.kind === "ss" ? "Social Security" : x.partner === d.primary.id ? `${d.primary.name}'s accounts` : "Other accounts";
+      const lbl = x.kind === "pension" ? "Pensions" : x.kind === "investment" ? "Investments" : x.kind === "savings" ? "Savings" : x.kind === "ss" ? "Social Security" : x.partner === d.primary.id ? `${d.primary.name}'s accounts` : "Other accounts";
       if (!kinds.some(([l]) => l === lbl)) kinds.push([lbl, partColor(x)]);
     });
     $("r-legend").innerHTML = kinds.map(([l, c]) => `<span><i class="sw" style="background:var(${c})"></i>${esc(l)}</span>`).join("") + `<span><i class="sw" style="border:2px solid var(--r4);background:transparent"></i>Social Security starting later</span><span><i class="ln proj"></i>Projected retirement spending</span><span><i class="ln today"></i>Spending today</span>`;
@@ -2641,7 +3231,7 @@
     for (let v = 0; v <= top + 1e-6; v += step) {
       g += `<line class="grid" x1="${L}" x2="${W - Rr}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${fk(v)}</text>`;
     }
-    const order = ["pension", "account", "investment", "ss"];
+    const order = ["pension", "account", "investment", "savings", "ss"];
     ages.forEach((x, i) => {
       const bx = L + i * bw + bw * 0.16;
       const w = bw * 0.68;
@@ -2686,11 +3276,12 @@
     const ages = TABLE_AGES.filter((a) => a >= lo && a <= hi);
     if (!ages.includes(S.rs.age)) ages.push(S.rs.age);
     ages.sort((a, b) => a - b);
-    const kinds = ["pension", "account", "investment", "ss"].filter((k) => retirementIncome(d, S, S.rs.age).parts.some((p) => p.kind === k));
+    const kinds = ["pension", "account", "investment", "savings", "ss"].filter((k) => retirementIncome(d, S, S.rs.age).parts.some((p) => p.kind === k));
     const names = {
       pension: "Pensions",
       account: "Accounts",
       investment: "Investments",
+      savings: "Savings",
       ss: "Soc. Sec."
     };
     $("rtable").innerHTML = `<tr>${d.partners.map((p) => `<th>${esc(p.name)}</th>`).join("")}<th>Year</th>${kinds.map((k) => `<th>${names[k]}</th>`).join("")}<th>After tax</th><th>Once SS starts</th><th>Projected spending</th><th>vs spending, long run</th></tr>` + ages.map((a) => {
@@ -2704,408 +3295,6 @@
         app.S.rs.age = +tr.dataset.a;
         changed();
       });
-    });
-  }
-
-  // src/ui/scenarios.ts
-  var CODE_PREFIX = "FP1:";
-  async function buildScenarios() {
-    const saved2 = await get("/api/state");
-    scen = { list: saved2.scenarios?.list ?? [], active: saved2.scenarios?.active ?? null };
-    wireBar();
-    wireShare();
-    wireCompare();
-    onChange(touch);
-    renderBar();
-  }
-  var scen = { list: [], active: null };
-  var pendingSwitch = null;
-  var pendingDel = false;
-  var pendingReset = false;
-  var cmpOpen = /* @__PURE__ */ new Set();
-  var snap = () => clone(app.S);
-  var settingsOf = (x) => rebase(app.defs, x, x.base);
-  var activeSc = () => scen.list.find((x) => x.id === scen.active) ?? null;
-  var newId = () => `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-  function scSave() {
-    send("PUT", "/api/state/scenarios", scen).catch(() => {
-    });
-  }
-  function dirtyFrom(x) {
-    return diffSettings(app.d, settingsOf(x), snap()).length > 0;
-  }
-  function applyState(S) {
-    app.S = clone(S);
-    fillPlanner();
-    fillRetire();
-    fillFuture();
-    changed();
-  }
-  function touch() {
-    pendingSwitch = null;
-    pendingDel = false;
-    pendingReset = false;
-    renderBar();
-  }
-  function renderBar() {
-    const a = activeSc();
-    const dirty2 = a ? dirtyFrom(a) : null;
-    const tabs = $("sb-tabs");
-    tabs.innerHTML = scen.list.length ? scen.list.map((x) => `<button type="button" class="chip"
-      data-id="${esc(x.id)}" aria-pressed="${x.id === scen.active}">${esc(x.name)}${x.id === scen.active && dirty2 ? " \u2022" : ""}</button>`).join("") : '<span class="small muted">No saved scenarios yet. Name your current settings and save them.</span>';
-    $("sb-state").textContent = pendingSwitch ? "Unsaved changes will be lost. Click the tab again to switch." : a ? dirty2 ? `Unsaved changes to "${a.name}"` : `Showing "${a.name}"` : "Current settings (not saved as a scenario)";
-    const up = $("sb-update");
-    up.hidden = !a;
-    up.textContent = a ? `Update "${a.name}"` : "Update";
-    up.disabled = !!a && !dirty2;
-    const del = $("sb-del");
-    del.hidden = !a;
-    del.textContent = pendingDel ? "Click again to delete" : "Delete";
-    $("sb-reset").textContent = pendingReset ? "Click again to reset" : "Reset everything";
-    const cmp = $("sb-cmp");
-    cmp.disabled = scen.list.length === 0;
-    cmp.title = scen.list.length ? "" : "Save a scenario first";
-    tabs.querySelectorAll("button").forEach((b) => {
-      b.addEventListener("click", () => {
-        const id = b.dataset.id;
-        if (id === scen.active) return;
-        const cur = activeSc();
-        const dirtyNow = cur ? dirtyFrom(cur) : !scen.list.some((x) => !dirtyFrom(x)) && diffSettings(app.d, app.defs, snap()).length > 0;
-        if (dirtyNow && pendingSwitch !== id) {
-          pendingSwitch = id;
-          renderBar();
-          return;
-        }
-        pendingSwitch = null;
-        scen.active = id;
-        scSave();
-        applyState(settingsOf(scen.list.find((x) => x.id === id)));
-      });
-    });
-    renderCompare();
-    renderShare();
-  }
-  function wireBar() {
-    const bar = $("scenarios");
-    bar.addEventListener("input", (e) => e.stopPropagation());
-    $("sb-save").addEventListener("click", () => {
-      const inp = $in("sb-name");
-      const name = inp.value.trim() || `Scenario ${scen.list.length + 1}`;
-      const x = {
-        id: newId(),
-        name,
-        saved: (/* @__PURE__ */ new Date()).toISOString(),
-        ...snap(),
-        base: clone(app.defs)
-      };
-      scen.list.push(x);
-      scen.active = x.id;
-      inp.value = "";
-      scSave();
-      renderBar();
-    });
-    $in("sb-name").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") $("sb-save").click();
-    });
-    $("sb-update").addEventListener("click", () => {
-      const a = activeSc();
-      if (!a) return;
-      Object.assign(a, snap(), { saved: (/* @__PURE__ */ new Date()).toISOString(), base: clone(app.defs) });
-      scSave();
-      renderBar();
-    });
-    $("sb-del").addEventListener("click", () => {
-      if (!pendingDel) {
-        pendingDel = true;
-        renderBar();
-        return;
-      }
-      pendingDel = false;
-      scen.list = scen.list.filter((x) => x.id !== scen.active);
-      scen.active = null;
-      scSave();
-      renderBar();
-    });
-    $("sb-reset").addEventListener("click", () => {
-      if (!pendingReset) {
-        pendingReset = true;
-        renderBar();
-        return;
-      }
-      pendingReset = false;
-      scen.active = null;
-      scSave();
-      applyState(app.defs);
-    });
-    bar.querySelectorAll("[data-close]").forEach((b) => {
-      b.addEventListener("click", () => {
-        if ($(b.dataset.close).getAttribute("aria-expanded") === "true") openPanel(b.dataset.close);
-      });
-    });
-    $("sb-cmp").addEventListener("click", () => openPanel("sb-cmp"));
-    $("sb-share-btn").addEventListener("click", () => openPanel("sb-share-btn"));
-  }
-  function openPanel(btnId) {
-    [["sb-cmp", "sb-compare"], ["sb-share-btn", "sb-share"]].forEach(([b, pnl]) => {
-      const open = b === btnId && $(pnl).hidden;
-      $(pnl).hidden = !open;
-      $(b).setAttribute("aria-expanded", String(open));
-    });
-    $("sh-msg").textContent = "";
-    renderShare();
-    renderCompare();
-  }
-  function wireCompare() {
-    ["cmp-a", "cmp-b"].forEach((id) => $(id).addEventListener("change", renderCompare));
-    $("cmp-cards").addEventListener("click", (e) => {
-      const b = e.target.closest("[data-det]");
-      if (!b) return;
-      const k = b.dataset.det;
-      if (cmpOpen.has(k)) cmpOpen.delete(k);
-      else cmpOpen.add(k);
-      renderCompare();
-      document.querySelector(`[data-det="${k}"]`)?.focus();
-    });
-  }
-  function renderCompare() {
-    if ($("sb-compare").hidden) return;
-    const d = app.d;
-    const opts = [
-      ["current", "Current settings"],
-      ...scen.list.map((x) => [x.id, x.name])
-    ];
-    ["cmp-a", "cmp-b"].forEach((id, i) => {
-      const sel = $(id);
-      const prev = sel.value;
-      sel.innerHTML = opts.map(([v, n]) => `<option value="${esc(v)}">${esc(n)}</option>`).join("");
-      sel.value = opts.some((o) => o[0] === prev) ? prev : (opts[i] ?? opts[0])[0];
-    });
-    const pick = (v) => v === "current" ? snap() : settingsOf(scen.list.find((x) => x.id === v));
-    const A = pick($("cmp-a").value);
-    const B = pick($("cmp-b").value);
-    const nameOf = (id) => esc(opts.find((o) => o[0] === $(id).value)[1]);
-    const nA = nameOf("cmp-a");
-    const nB = nameOf("cmp-b");
-    const ra = results(d, A);
-    const rb = results(d, B);
-    const show = (v, kind) => Number.isNaN(v) ? "\u2013" : kind === "age" || kind === "year" ? String(v) : kind === "pct" ? `${v}%` : fmt(v);
-    const same2 = (x) => Number.isNaN(x) || Math.abs(x) < 0.5;
-    const dStr = (x, kind) => same2(x) ? "\u2013" : kind === "age" || kind === "year" ? `${x > 0 ? "+" : "\u2212"}${Math.abs(x)} yr${Math.abs(x) === 1 ? "" : "s"}` : kind === "pct" ? `${x > 0 ? "+" : "\u2212"}${Math.abs(x)} pts` : `${x > 0 ? "+" : "\u2212"}${fmt(Math.abs(x))}`;
-    const dCls = (x, good) => same2(x) || !good ? "" : x * good > 0 ? "pos" : "neg";
-    const SEC = {
-      "Monthly budget today": "budget",
-      "Before retirement": "budget",
-      "College 529s": "college",
-      "Retirement": "retire"
-    };
-    const rows = { budget: [], college: [], retire: [] };
-    const R = {};
-    let sec = "budget";
-    ra.forEach((row, i) => {
-      if (row[1] === null) {
-        sec = SEC[row[0]] ?? sec;
-        rows[sec].push({ head: row[0] });
-        return;
-      }
-      const b = rb[i][1];
-      const r = { lbl: row[0], a: row[1], b, d: b - row[1], good: row[2] ?? 0, kind: row[3] };
-      rows[sec].push(r);
-      R[r.lbl] = r;
-    });
-    const diffs = diffSettings(d, A, B);
-    const dif = { budget: [], college: [], retire: [] };
-    diffs.forEach((x) => {
-      dif[x[4]].push(x);
-      if (x[3][0] === "st" && x[3][1] === "sav" && x[3][2].startsWith("529:")) dif.college.push(x);
-    });
-    const money = (x, more, less) => `${fmt(Math.abs(x))}/mo ${x > 0 ? more : less}`;
-    const sumB = [];
-    const nPlan = dif.budget.filter((x) => x[3][1] === "plan").length;
-    const dSp = R["Spending (net)"].d;
-    if (nPlan || !same2(dSp)) {
-      sumB.push((nPlan ? `${nPlan} spending categor${nPlan === 1 ? "y" : "ies"} changed` + (same2(dSp) ? ", same total" : ": ") : "") + (same2(dSp) ? "" : `<b>${money(dSp, "more spending", "less spending")}</b>`));
-    }
-    const inv = R.Investing;
-    if (!same2(inv.d)) {
-      sumB.push(`<b>${money(inv.d, "more invested", "less invested")}</b> (${fmt(inv.a)} \u2192 ${fmt(inv.b)})`);
-    }
-    const sv = R.Savings;
-    if (!same2(sv.d)) sumB.push(money(sv.d, "more saved", "less saved"));
-    const inc = R["Take-home income"];
-    if (!same2(inc.d)) sumB.push(money(inc.d, "more take-home income", "less take-home income"));
-    const tx = R["Tax set-aside"];
-    if (!same2(tx.d)) sumB.push(money(tx.d, "more set aside for taxes", "less set aside for taxes"));
-    const listed = (list, n = 3) => list.slice(0, n).map(([l, a, b]) => `${esc(l)}: ${esc(a)} \u2192 ${esc(b)}`).concat(list.length > n ? [`and ${list.length - n} more, in the details`] : []);
-    const tile = (lbl, r, sub = "") => `<div class="cmp-tile"><span class="eyebrow">${esc(lbl)}</span>` + (same2(r.d) ? `<span class="big muted">same</span><span class="small muted">${show(r.a, r.kind)}${sub ? ` \xB7 ${sub}` : ""}</span>` : `<span class="big num ${dCls(r.d, r.good)}">${dStr(r.d, r.kind)}</span><span class="small muted">${show(r.a, r.kind)} \u2192 ${show(r.b, r.kind)}${sub ? ` \xB7 ${sub}` : ""}</span>`) + "</div>";
-    const saveR = { lbl: "", a: sv.a + inv.a, b: sv.b + inv.b, d: sv.d + inv.d, good: 0 };
-    const kidTiles = d.children.map((c) => {
-      const cov = R[`${c.name}: share of college covered`];
-      const g = R[`${c.name}: surplus / shortfall, today's $`];
-      return tile(`${c.name} covered`, cov, same2(g.d) ? "" : `${g.b < 0 ? "shortfall" : "surplus"} ${g.d > 0 ? "+" : "\u2212"}${fmt(Math.abs(g.d))} in today\u2019s $`);
-    }).join("");
-    const ageRow = R[`Retirement age (${d.primary.name})`];
-    const tiles = {
-      budget: tile("Left over / month", R["Left over each month"]) + tile("Spending / month", R["Spending (net)"]) + tile("Saved + invested", saveR),
-      college: kidTiles || '<p class="small muted">No children in this plan.</p>',
-      retire: tile("At retirement", R["Gap / surplus at retirement"], "surplus or gap / mo") + tile("Long run", R["Gap / surplus, long run"], "once all Social Security starts") + (same2(ageRow.d) ? tile("Income after tax", R["Income after tax, at retirement"]) : tile("Retirement age", ageRow))
-    };
-    const sums = {
-      budget: sumB,
-      college: listed(dif.college),
-      retire: listed(dif.retire)
-    };
-    const titles = {
-      budget: "Monthly budget",
-      college: "College 529s",
-      retire: "Retirement"
-    };
-    const keys = ["budget", "college", "retire"].filter((k) => k !== "college" || d.children.length);
-    const resTable = (list) => `<div class="ptable-scroll"><table
-    class="rtable cmp"><tr><th>Result</th><th>${nA}</th><th>${nB}</th><th>Difference</th></tr>` + list.map((r) => "head" in r ? `<tr class="grp"><td colspan="4">${esc(r.head)}</td></tr>` : `<tr><td>${esc(r.lbl)}</td><td>${show(r.a, r.kind)}</td><td>${show(r.b, r.kind)}</td><td class="${dCls(r.d, r.good)}">${dStr(r.d, r.kind)}</td></tr>`).join("") + "</table></div>";
-    const setTable = (list) => list.length ? `<div class="ptable-scroll"><table
-    class="rtable cmp"><tr><th>Setting</th><th>${nA}</th><th>${nB}</th></tr>` + list.map(([l, a, b]) => `<tr><td>${esc(l)}</td><td>${esc(a)}</td><td>${esc(b)}</td></tr>`).join("") + "</table></div>" : '<p class="small muted">No settings differ here.</p>';
-    $("cmp-note").innerHTML = diffs.length ? `<span><b>${diffs.length}</b> setting${diffs.length === 1 ? "" : "s"} differ.</span><span>Differences show <b>${nB}</b> compared with <b>${nA}</b>. Green is better, red is worse.</span>` : "<span>These two have the same settings.</span>";
-    $("cmp-cards").style.gridTemplateColumns = `repeat(${keys.length},minmax(0,1fr))`;
-    $("cmp-cards").innerHTML = keys.map((k) => {
-      const n = dif[k].length;
-      const on = cmpOpen.has(k);
-      return `<div class="cmp-card${on ? " open" : ""}"><div class="cmp-head"><h3>${titles[k]}</h3><span
-      class="cmp-tools"><span class="cmp-count ${n ? "on" : ""}">${n ? `${n} change${n === 1 ? "" : "s"}` : "no changes"}</span><button class="btn toggle" type="button"
-        data-det="${k}" aria-expanded="${on}" aria-controls="cmp-det-${k}">Details</button></span></div>` + (sums[k].length ? `<ul class="cmp-sum">${sums[k].map((x) => `<li>${x}</li>`).join("")}</ul>` : "") + `<div class="cmp-tiles">${tiles[k]}</div></div>`;
-    }).join("");
-    $("cmp-dets").innerHTML = keys.filter((k) => cmpOpen.has(k)).map((k) => `<div class="cmp-det"
-    id="cmp-det-${k}"><h3>${titles[k]}: details</h3><h4>Results</h4>${resTable(rows[k])}<h4>Settings that differ</h4>${setTable(dif[k])}</div>`).join("");
-  }
-  function sendable() {
-    const a = activeSc();
-    if (a && !dirtyFrom(a)) return { ...a, ...settingsOf(a) };
-    const name = a ? `${a.name} (edited)` : $in("sb-name").value.trim() || "Shared settings";
-    return { id: a ? a.id : newId(), name, saved: (/* @__PURE__ */ new Date()).toISOString(), ...snap() };
-  }
-  function shareCode(list) {
-    const json = JSON.stringify({ s: list.map((x) => compact(app.d, x)) });
-    return CODE_PREFIX + btoa(unescape(encodeURIComponent(json)));
-  }
-  function parseIncoming(text) {
-    const t = text.trim();
-    const data = t.startsWith(CODE_PREFIX) ? JSON.parse(decodeURIComponent(escape(atob(t.slice(CODE_PREFIX.length).replace(/\s+/g, ""))))) : JSON.parse(t);
-    if (Array.isArray(data.s)) {
-      return data.s.map((c) => ({
-        id: c.id || newId(),
-        name: c.name || "Shared scenario",
-        saved: c.saved || (/* @__PURE__ */ new Date()).toISOString(),
-        ...expand(app.d, c),
-        base: clone(app.defs)
-      }));
-    }
-    if (Array.isArray(data.scenarios)) {
-      return data.scenarios.map((x) => ({ ...x, id: x.id || newId() }));
-    }
-    throw new Error("not a scenario");
-  }
-  function addIncoming(list) {
-    const added = [];
-    const updated = [];
-    let unchanged = 0;
-    list.forEach((x) => {
-      const have = scen.list.find((y) => y.id === x.id);
-      if (have) {
-        if ((x.saved || "") > (have.saved || "")) {
-          Object.assign(have, x);
-          updated.push(have.name);
-          if (have.id === scen.active) applyState(settingsOf(have));
-        } else {
-          unchanged++;
-        }
-        return;
-      }
-      let n = x.name;
-      let k = 2;
-      while (scen.list.some((y) => y.name === n)) n = `${x.name} (${k++})`;
-      scen.list.push({ ...x, name: n });
-      added.push(n);
-    });
-    scSave();
-    renderBar();
-    const parts = [];
-    if (added.length) parts.push(`Added ${added.map((n) => `"${n}"`).join(", ")}`);
-    if (updated.length) {
-      parts.push(`Updated ${updated.map((n) => `"${n}"`).join(", ")} with the newer version`);
-    }
-    if (unchanged) parts.push(`${unchanged} already up to date`);
-    return `${parts.join(". ")}.`;
-  }
-  function renderShare() {
-    if ($("sb-share").hidden) return;
-    const x = sendable();
-    const a = activeSc();
-    $("sh-what").textContent = a && x.name === a.name ? `"${a.name}"` : a ? `"${a.name}" with your unsaved changes` : "your current settings (not saved as a scenario)";
-    $("sh-code").value = shareCode([x]);
-  }
-  function download(name, text) {
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([text], { type: "application/json" }));
-    a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1e3);
-  }
-  function wireShare() {
-    const msg = $("sh-msg");
-    $("sh-copy").addEventListener("click", () => {
-      renderShare();
-      const ta = $("sh-code");
-      const fallback = () => {
-        ta.focus();
-        ta.select();
-        msg.textContent = "The code is selected. Press Cmd+C (or Ctrl+C) to copy it.";
-      };
-      try {
-        navigator.clipboard.writeText(ta.value).then(() => {
-          msg.textContent = "Copied. Paste it into a message or email.";
-        }, fallback);
-      } catch {
-        fallback();
-      }
-    });
-    $("sh-file").addEventListener("click", () => {
-      const x = sendable();
-      const slug2 = x.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "scenario";
-      download(`scenario-${slug2}.json`, JSON.stringify({
-        app: "financial-planner",
-        s: [compact(app.d, x)]
-      }, null, 2));
-      msg.textContent = `Saved scenario-${slug2}.json. Attach it to a message or email.`;
-    });
-    $("sh-all").addEventListener("click", () => {
-      download("financial-planner-scenarios.json", JSON.stringify({
-        app: "financial-planner",
-        version: 1,
-        exported: (/* @__PURE__ */ new Date()).toISOString(),
-        scenarios: scen.list
-      }, null, 2));
-      msg.textContent = `Backed up ${scen.list.length} scenario${scen.list.length === 1 ? "" : "s"}.`;
-    });
-    $("sh-add").addEventListener("click", () => {
-      const ta = $("sh-paste");
-      try {
-        msg.textContent = addIncoming(parseIncoming(ta.value));
-        ta.value = "";
-      } catch {
-        msg.textContent = `That doesn't look like a share code. It should start with ${CODE_PREFIX} and be pasted in full.`;
-      }
-    });
-    $in("sh-open").addEventListener("change", (e) => {
-      const input2 = e.target;
-      const files = [...input2.files ?? []];
-      if (!files.length) return;
-      Promise.all(files.map((f) => f.text())).then((texts) => {
-        msg.textContent = addIncoming(texts.flatMap(parseIncoming));
-      }).catch(() => {
-        msg.textContent = "One of those files isn't a scenario file.";
-      });
-      input2.value = "";
     });
   }
 
@@ -3129,7 +3318,8 @@
   ];
   var MODES = [
     ["fixed", "Fixed $ per month"],
-    ["pct", "% of what is left each month"]
+    ["pct", "% of what is left each month"],
+    ["rest", 'The rest (split evenly with other "rest" lines)']
   ];
   var CLAIM_AGES = [62, 63, 64, 65, 66, 67, 68, 69, 70];
   function settingsDirty() {
@@ -3146,7 +3336,7 @@
       return;
     }
     root.innerHTML = `<div class="sec-head"><h2 id="settings-title">Settings</h2>
-      <a class="btn" href="#planner" style="text-decoration:none">Back to the budget</a></div>
+      <a class="btn" href="#budget" style="text-decoration:none">Back to the budget</a></div>
     <p class="small muted">Plan folder <span class="mono">${esc(cfg.plan_dir)}</span>. Changes are
       saved to the YAML files in its <span class="mono">config</span> folder (you can also edit
       them by hand). Keep this folder private: it holds your financial data.</p>
@@ -3167,20 +3357,20 @@
   var dirty = false;
   function renderTab() {
     const body = document.getElementById("st-body");
-    const render = {
+    const render2 = {
       household: renderHousehold,
       money: renderMoney,
       assumptions: renderAssumptions,
       sources: renderSources,
       categories: renderCategories,
-      share: renderShare2,
+      share: renderShare,
       categorize: (el) => renderCategorizeTab(el, () => {
         dirty = true;
       })
     };
-    render[current](body);
+    render2[current](body);
   }
-  async function save(section2, value) {
+  async function save2(section2, value) {
     await send("PUT", `/api/config/${section2}`, value);
     dirty = true;
     cfg = await get("/api/config");
@@ -3230,7 +3420,7 @@
     return out;
   }
   function readRows(root, list) {
-    return [...root.querySelectorAll(`[data-list="${list}"] > [data-row]`)].map((row) => readFields(row));
+    return [...root.querySelectorAll(`[data-list="${list}"] > [data-row]`)].map((row2) => readFields(row2));
   }
   function listEditor(list, rows, rowHtml, addLabel) {
     return `<div class="listed" data-list="${list}">${rows.map((r) => `<div class="item"
@@ -3310,7 +3500,7 @@
         <button class="card btn add" type="button" id="add-child" style="place-content:center;min-height:120px">+ Add child</button></div>
     </div><p class="msg" id="hh-msg"></p>`;
     const msg = el.querySelector("#hh-msg");
-    const saveHH = async () => save("household", { ...hh, partners, children });
+    const saveHH = async () => save2("household", { ...hh, partners, children });
     el.querySelector("#add-partner").addEventListener("click", () => partnerForm(
       null,
       partners,
@@ -3529,9 +3719,9 @@
       const msg = el.querySelector("#m-msg");
       try {
         const other = el.querySelector('[data-k="other"]').value;
-        await save("other_income_monthly", +other || 0);
-        await save("investments", mergeIds(investments, readRows(el, "investments").map(contribOut)));
-        await save("savings", mergeIds(savings, readRows(el, "savings").map((r) => {
+        await save2("other_income_monthly", +other || 0);
+        await save2("investments", mergeIds(investments, readRows(el, "investments").map(contribOut)));
+        await save2("savings", mergeIds(savings, readRows(el, "savings").map((r) => {
           const out = contribOut(r);
           if (!out.overflow_to || out.max_balance === void 0) delete out.overflow_to;
           return out;
@@ -3543,8 +3733,8 @@
     });
   }
   function contribFields(r, prefix = "", label2 = "Contribution") {
-    const pct = r.left_pct != null;
-    return select(`${prefix}_mode`, label2, MODES, pct ? "pct" : "fixed") + `<span class="contents" data-when="fixed"${pct ? " hidden" : ""}>${input(`${prefix}monthly`, "Per month", r.monthly ?? 0, "number")}</span><span class="contents" data-when="pct"${pct ? "" : " hidden"}>${input(`${prefix}left_pct`, "% of left-over", r.left_pct ?? "", "number")}${input(
+    const mode2 = r.rest ? "rest" : r.left_pct != null ? "pct" : "fixed";
+    return select(`${prefix}_mode`, label2, MODES, mode2) + `<span class="contents" data-when="fixed"${mode2 === "fixed" ? "" : " hidden"}>${input(`${prefix}monthly`, "Per month", r.monthly ?? 0, "number")}</span><span class="contents" data-when="pct"${mode2 === "pct" ? "" : " hidden"}>${input(`${prefix}left_pct`, "% of left-over", r.left_pct ?? "", "number")}${input(
       `${prefix}min_monthly`,
       "At least per month",
       r.min_monthly ?? "",
@@ -3567,6 +3757,8 @@
   }
   function contribOut(f) {
     const { _mode: mode2, ...out } = f;
+    delete out.rest;
+    if (mode2 === "rest") out.rest = true;
     if (mode2 === "pct") {
       out.left_pct = out.left_pct ?? 0;
     } else {
@@ -3577,6 +3769,7 @@
     return out;
   }
   function contribText(c) {
+    if (c.rest) return "the rest";
     return c.left_pct != null ? `${c.left_pct}% of left-over` : fmt(+c.monthly || 0);
   }
   function slug(text) {
@@ -3696,8 +3889,8 @@
       if (cp) nextCol.presets = cp;
       else delete nextCol.presets;
       try {
-        await save("plan", pick("plan."));
-        await save("assumptions", { ...asm, retirement: nextRet, college: nextCol });
+        await save2("plan", pick("plan."));
+        await save2("assumptions", { ...asm, retirement: nextRet, college: nextCol });
         report(msg);
       } catch (err) {
         report(msg, err);
@@ -3729,7 +3922,7 @@
     ));
     el.querySelectorAll(".card [data-rm]").forEach((b) => confirmClick(b, () => {
       sources.splice(+b.dataset.rm, 1);
-      save("sources", sources).then(() => renderTab(), (err) => report(msg, err));
+      save2("sources", sources).then(() => renderTab(), (err) => report(msg, err));
     }));
   }
   function sourceForm(i, sources) {
@@ -3815,7 +4008,7 @@
       const next = build(form2);
       if (i === null) list.push(next);
       else list[i] = next;
-      await save("sources", list);
+      await save2("sources", list);
     }, { catmap: () => catMapRow() });
     const form = document.getElementById("fd-body");
     const filesInput = form.querySelector('[data-k="files"]');
@@ -3827,12 +4020,12 @@
     };
     styleSel.addEventListener("change", syncStyle);
     syncStyle();
-    const setColumns = (cols, guess = {}) => {
+    const setColumns = (cols2, guess = {}) => {
       form.querySelectorAll("select[data-col]").forEach((sel) => {
         const keep = sel.value || String(guessFor(sel.dataset.k, guess) ?? "");
-        sel.innerHTML = (sel.dataset.optionalCol !== void 0 ? '<option value="">(none)</option>' : "") + cols.map((c) => `<option${c === keep ? " selected" : ""}>${esc(c)}</option>`).join("");
+        sel.innerHTML = (sel.dataset.optionalCol !== void 0 ? '<option value="">(none)</option>' : "") + cols2.map((c) => `<option${c === keep ? " selected" : ""}>${esc(c)}</option>`).join("");
       });
-      form.querySelector("#src-col-list").innerHTML = cols.map((c) => `<option value="${esc(c)}">`).join("");
+      form.querySelector("#src-col-list").innerHTML = cols2.map((c) => `<option value="${esc(c)}">`).join("");
       const desc = form.querySelector('[data-k="description"]');
       if (!desc.value && guess.description) desc.value = String(guess.description);
       if (guess.date_format) {
@@ -3901,9 +4094,9 @@
   function globRe(glob) {
     return new RegExp(`^${glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`);
   }
-  function colSelect(k, label2, cols, value, optional = false) {
+  function colSelect(k, label2, cols2, value, optional = false) {
     const v = value ? String(value) : "";
-    const opts = [.../* @__PURE__ */ new Set([...v ? [v] : [], ...cols])];
+    const opts = [.../* @__PURE__ */ new Set([...v ? [v] : [], ...cols2])];
     return `<label class="field"><span>${esc(label2)}</span><select data-k="${esc(k)}" data-col${optional ? " data-optional-col data-optional" : ""}>${optional ? '<option value="">(none)</option>' : ""}${opts.map((c) => `<option${c === v ? " selected" : ""}>${esc(c)}</option>`).join("")}</select></label>`;
   }
   function guessFor(k, guess) {
@@ -3929,15 +4122,15 @@
     const cats = cfg.raw.categories ?? [];
     return `<datalist id="cat-names">${cats.map((c) => `<option value="${esc(c.name)}">`).join("")}</datalist>`;
   }
-  function renderShare2(el) {
+  function renderShare(el) {
     el.innerHTML = `<div class="panel form">
       <h3>Send your whole plan</h3>
       <p class="small">Saves everything in this plan as one <span class="mono">.zip</span> file:
-        settings, categories and rules, your CSV files, and (if ticked) your planner edits and
-        saved scenarios. Send it by AirDrop or Messages; the other person opens it in their
+        settings, categories and rules, your CSV files, and (if ticked) your budget edits and
+        saved budgets. Send it by AirDrop or Messages; the other person opens it in their
         Financial Planner and sees exactly what you see.</p>
-      <label class="field check"><input type="checkbox" id="sh-state" checked>Include my planner
-        edits and saved scenarios</label>
+      <label class="field check"><input type="checkbox" id="sh-state" checked>Include my budget
+        edits and saved budgets</label>
       <div class="btns"><a class="btn primary" id="sh-dl" href="/api/plan/export" download>Save plan
         as a file</a></div>
       <div class="banner"><b>This file contains your real transactions and finances.</b>
@@ -3967,7 +4160,7 @@
   function renderCategories(el) {
     const cats = section("categories", []);
     const original = cats.map((c) => String(c.name));
-    const row = (c, i) => `<tr data-row data-orig="${i}">
+    const row2 = (c, i) => `<tr data-row data-orig="${i}">
     <td><input data-k="name" value="${esc(c.name ?? "")}" style="width:150px"></td>
     <td><select data-k="kind">${KINDS2.map(([k, l]) => `<option value="${k}"${(c.kind ?? "spending") === k ? " selected" : ""}>${l}</option>`).join("")}</select></td>
     <td><input data-k="group" value="${esc(c.group ?? "Other")}" style="width:100px"></td>
@@ -3984,7 +4177,7 @@
       <button class="btn sm danger" type="button" data-del>Remove</button></td></tr>`;
     el.innerHTML = `<div class="panel" style="display:grid;gap:10px">
       <div class="sec-head"><h3>Categories</h3><span class="small muted">Saved in ${esc(fileOf("categories"))}. Renaming a category also updates the rules that use it.</span></div>
-      <p class="small muted"><b>Kind:</b> regular spending is averaged in the planner. Annual
+      <p class="small muted"><b>Kind:</b> regular spending is averaged in Spending and Budgeting. Annual
         expenses (taxes, insurance), 1-time purchases and emergency fund costs each get an on/off
         toggle in their own planner box; emergency fund costs are paid from the emergency fund.
         Credits (money in) can be subtracted; ignore is for transfers, card payments and
@@ -3995,7 +4188,7 @@
       <div class="ptable-scroll"><table class="dtable edit" id="cat-table"><thead><tr>
         <th>Name</th><th>Kind</th><th>Group</th><th>Flexible</th><th>Kids gone %</th><th>Retired %</th>
         <th>On by default</th><th>In retirement</th><th>Tax</th><th>Offsets</th><th>Toggle label</th>
-        <th>Note</th><th></th></tr></thead><tbody>${cats.map(row).join("")}</tbody></table></div>
+        <th>Note</th><th></th></tr></thead><tbody>${cats.map(row2).join("")}</tbody></table></div>
       ${catNamesDatalist()}
       <div class="btns"><button class="btn sm add" type="button" id="cat-add">+ Add category</button>
         <button class="btn primary" type="button" id="cat-save">Save categories</button></div>
@@ -4010,7 +4203,7 @@
       }
     });
     el.querySelector("#cat-add").addEventListener("click", () => {
-      body.insertAdjacentHTML("beforeend", row({ name: "", group: "Other" }, -1));
+      body.insertAdjacentHTML("beforeend", row2({ name: "", group: "Other" }, -1));
       body.lastElementChild.querySelector("input").focus();
     });
     el.querySelector("#cat-save").addEventListener("click", async () => {
@@ -4038,7 +4231,7 @@
         if (c.offsets && renames.has(String(c.offsets))) c.offsets = renames.get(String(c.offsets));
       });
       try {
-        await save("categories", next);
+        await save2("categories", next);
         if (renames.size) await applyRenames(renames);
         renderTab();
         report(document.getElementById("cat-msg"), void 0, renames.size ? `Saved. Updated rules for ${renames.size} renamed categor${renames.size === 1 ? "y" : "ies"}.` : "Saved.");
@@ -4051,14 +4244,14 @@
     const rename = (v) => renames.get(String(v)) ?? v;
     const rules = section("rules", []);
     if (rules.some((r) => renames.has(String(r.category)))) {
-      await save("rules", rules.map((r) => ({ ...r, category: rename(r.category) })));
+      await save2("rules", rules.map((r) => ({ ...r, category: rename(r.category) })));
     }
     const sources = section("sources", []);
     if (sources.some((s) => Object.values(s.category_map ?? {}).some((v) => renames.has(String(v))))) {
-      await save("sources", sources.map((s) => s.category_map ? { ...s, category_map: Object.fromEntries(Object.entries(s.category_map).map(([k, v]) => [k, rename(v)])) } : s));
+      await save2("sources", sources.map((s) => s.category_map ? { ...s, category_map: Object.fromEntries(Object.entries(s.category_map).map(([k, v]) => [k, rename(v)])) } : s));
     }
     for (const key of ["default_category", "default_credit_category"]) {
-      if (renames.has(String(cfg.raw[key]))) await save(key, rename(cfg.raw[key]));
+      if (renames.has(String(cfg.raw[key]))) await save2(key, rename(cfg.raw[key]));
     }
   }
 
@@ -4075,7 +4268,7 @@
     mark(saved());
     buttons.forEach((b) => b.addEventListener("click", () => {
       const t = b.dataset.v;
-      apply(t);
+      apply2(t);
       try {
         if (t === "auto") localStorage.removeItem(KEY);
         else localStorage.setItem(KEY, t);
@@ -4092,7 +4285,7 @@
       return "auto";
     }
   }
-  function apply(t) {
+  function apply2(t) {
     const root = document.documentElement;
     if (t === "auto") {
       delete root.dataset.theme;
@@ -4165,12 +4358,14 @@
     if (!app.d.partners.length) {
       banner('<b>No partners yet.</b> Add at least one under <a href="#settings/household">Settings \u203A Household</a> to see income and retirement.');
     }
+    await loadPresets();
+    buildSpending();
     buildPlanner();
-    buildExplorer();
     buildCollege();
     buildRetire();
     buildFuture();
-    await buildScenarios();
+    await buildBudgets();
+    buildStrip();
     ready = true;
     const back = sessionStorage.getItem("fp-hash");
     sessionStorage.removeItem("fp-hash");
