@@ -51,16 +51,36 @@ household:
 
 other_income_monthly: 0
 
+# Each contribution is a fixed `monthly` amount, or `left_pct` (a share of what is left each
+# month after spending, taxes and the fixed amounts) with optional min_monthly / max_monthly.
 savings:
+  - id: savings
+    name: Savings account
+    type: savings
+    balance: 6000
+    monthly: 300
   - id: emergency
-    name: Emergency savings
-    monthly: 500
+    name: Emergency fund
+    type: emergency      # emergency-kind costs (e.g. car repairs) are paid from here
+    balance: 9000
+    max_balance: 20000   # past this, contributions go to overflow_to
+    overflow_to: bonds
+    left_pct: 20
+    min_monthly: 200
+    max_monthly: 1000
 
 investments:
-  - id: brokerage
-    name: Brokerage
+  - id: stocks
+    name: Stocks
+    type: stocks
     balance: 22000
-    return_pct: 0      # 0 = off until you pick a rate
+    return_pct: 6
+    monthly: 300
+  - id: bonds
+    name: Bonds
+    type: bonds
+    balance: 8000
+    return_pct: 4
     monthly: 0
 
 assumptions:
