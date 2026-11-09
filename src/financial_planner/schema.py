@@ -129,6 +129,9 @@ class Partner(_Model):
         take_home_note: Where the take-home number came from.
         raise_pct: Yearly raise above inflation.
         social_security: Social Security estimate.
+        retirement_age: Starting retirement age. For the first partner, empty uses
+            assumptions.retirement.default_age; for the others, empty means "the same year as the
+            first partner".
         pensions: Pensions.
         accounts: Retirement accounts.
     """
@@ -139,6 +142,7 @@ class Partner(_Model):
     take_home_note: str = ''
     raise_pct: float = 0
     social_security: SocialSecurity = Field(default_factory=SocialSecurity)
+    retirement_age: Optional[int] = Field(None, ge=40, le=80)
     pensions: list[Pension] = Field(default_factory=list)
     accounts: list[Account] = Field(default_factory=list)
 
@@ -187,8 +191,8 @@ class Household(_Model):
     """Everyone in the plan.
 
     Attributes:
-        partners: One or more adults. The first is the "primary": the retirement-age slider is
-            their age and everyone retires in the same calendar year.
+        partners: One or more adults. The first is the "primary": the retirement chart follows
+            their age. Others retire the same year unless they have their own retirement_age.
         children: Zero or more children.
     """
     partners: list[Partner] = Field(default_factory=list)
@@ -243,7 +247,8 @@ class RetirementAssumptions(_Model):
         withdrawal_pct: Yearly withdrawal rate from savings in retirement.
         tax_pct: Overall income tax rate in retirement.
         health_insurance_monthly: Health insurance cost per month after retiring.
-        default_age: Starting retirement age of the primary partner.
+        default_age: Starting retirement age of the primary partner (unless they set
+            retirement_age).
         presets: Named return/inflation presets.
     """
     return_pct: float = 5.5
