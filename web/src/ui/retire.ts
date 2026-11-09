@@ -7,8 +7,8 @@
 
 import {$, $in, app, changed, hideTip, num, onChange, showTip} from '../app';
 import {esc, fk, fmt, niceStep, sum} from '../format';
-import {ageWhen, clone, type IncomePart, retirementIncome, retireYear, spendAt, spendToday,
-        ssFactor} from '../model';
+import {ageWhen, budget, clone, type IncomePart, overflowTarget, retirementIncome, retireYear,
+        spendAt, spendToday, ssFactor} from '../model';
 
 //
 // CONSTANTS
@@ -282,14 +282,16 @@ function drawRetire(): void {
   });
   d.p.investments.forEach((v) => {
     const st = rs.inv[v.id];
-    const monthly = S.st.sav[`inv:${v.id}`] ?? 0;
-    const on = st.bal > 0 || monthly > 0;
+    const monthly = budget(d, S.st).amt[`inv:${v.id}`] ?? 0;
+    const fed = d.p.savings.filter((sv) => overflowTarget(d, sv) === v.id).map((sv) => sv.name);
+    const on = st.bal > 0 || monthly > 0 || fed.length > 0;
     $(`pn-inv-${v.id}`).classList.toggle('pane-off', !on);
     $(`r-ic-${v.id}`).textContent = fmt(monthly);
     $(`r-ir-${v.id}`).textContent = `${st.ret}%`;
     $(`r-inote-${v.id}`).textContent = !on ?
         'Off until you enter a balance here or a monthly amount in the planner.' :
-        `Its own return rate, separate from the presets.${st.ret < rs.inf ?
+        `Its own return rate, separate from the presets.${fed.length ? ` Also gets what ${
+            fed.join(' and ')} adds once full.` : ''}${st.ret < rs.inf ?
             ` At ${st.ret}% it grows slower than ${rs.inf}% inflation, so it loses buying power.` :
             ''} Turned into monthly income at the withdrawal rate.`;
   });
