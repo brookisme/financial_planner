@@ -126,13 +126,15 @@ export class Data {
  */
 export function defaults(d: Data): Settings {
   const p = d.p;
-  const st: PlannerState = {inc: {}, sav: {}, on: {}, plan: {}};
+  const st: PlannerState = {inc: {}, sav: {}, on: {}, plan: {},
+    annual: d.annual.map((i) => ({name: d.cats[i].name, amt: Math.round(d.avg(i) * 12)})),
+    emerg: null};
   d.partners.forEach((x) => st.inc[x.id] = x.take_home_monthly);
   st.inc.other = p.other_income_monthly;
   d.children.forEach((c) => st.sav[`529:${c.id}`] = savLine(c.college_529));
   p.savings.forEach((s) => st.sav[`sav:${s.id}`] = savLine(s));
   p.investments.forEach((v) => st.sav[`inv:${v.id}`] = savLine(v));
-  [...d.costs, ...d.credits].forEach((i) => st.on[d.cats[i].name] = d.cats[i].default_on);
+  d.credits.forEach((i) => st.on[d.cats[i].name] = d.cats[i].default_on);
   d.regular.forEach((i) => st.plan[d.cats[i].name] = d.avg(i));
   d.credits.filter((i) => d.isPlannerCredit(i))
       .forEach((i) => st.plan[d.cats[i].name] = d.credAvg(i));
@@ -145,7 +147,7 @@ export function defaults(d: Data): Settings {
   const ra = p.assumptions.retirement;
   const rs: RetireState = {age: d.partners[0]?.retirement_age ?? ra.default_age,
     ret: ra.return_pct, inf: ra.inflation_pct, wd: ra.withdrawal_pct, ss: true, ages: {},
-    raise: {}, ssAmt: {}, claim: {}, pen: {}, acct: {}, inv: {}};
+    raise: {}, ssAmt: {}, claim: {}, pen: {}, acct: {}, inv: {}, draw: {}};
   d.partners.forEach((x, i) => {
     if (i > 0) rs.ages[x.id] = x.retirement_age ?? null;
     rs.raise[x.id] = x.raise_pct;
@@ -153,10 +155,16 @@ export function defaults(d: Data): Settings {
     rs.claim[x.id] = x.social_security.claim_age;
     x.pensions.forEach((pn, i) => rs.pen[`${x.id}:${i}`] = {on: true, est: {...pn.estimates},
       monthly: pn.monthly});
-    x.accounts.forEach((a, i) => rs.acct[`${x.id}:${i}`] = {on: true, bal: a.balance,
-      monthly: a.monthly});
+    x.accounts.forEach((a, i) => {
+      rs.acct[`${x.id}:${i}`] = {on: true, bal: a.balance, monthly: a.monthly};
+      rs.draw[`acct:${x.id}:${i}`] = null;
+    });
   });
-  p.investments.forEach((v) => rs.inv[v.id] = {bal: v.balance, ret: v.return_pct});
+  p.investments.forEach((v) => {
+    rs.inv[v.id] = {bal: v.balance, ret: v.return_pct};
+    rs.draw[`inv:${v.id}`] = null;
+  });
+  retireSavings(d).forEach((s) => rs.draw[`sav:${s.id}`] = null);
   const fs: FutureState = {kg: {}, rt: {}, health: ra.health_insurance_monthly, tax: ra.tax_pct,
     nominal: false};
   d.regular.forEach((i) => {
@@ -188,6 +196,24 @@ export function rebase(defs: Settings, saved: Partial<Settings>|null|undefined,
     setPath(out as unknown as Record<string, unknown>, JSON.parse(key), value);
   }
   return out;
+}
+
+/**
+ * A saved budget's planner settings on top of the current defaults (see rebase).
+ * @param defs Current planner defaults.
+ * @param saved The budget's settings.
+ * @param base The planner defaults when it was saved.
+ */
+export function rebaseBudget(defs: PlannerState, saved: PlannerState,
+                             base?: PlannerState|null): PlannerState {
+  const wrap = (st: PlannerState) => ({st}) as unknown as Settings;
+  return rebase(wrap(defs), wrap(saved), base ? wrap(base) : null).st;
+}
+
+/** Budget settings that differ between two budgets (see diffSettings). */
+export function diffBudget(d: Data, a: PlannerState, b: PlannerState): SettingDiff[] {
+  const wrap = (st: PlannerState) => ({st}) as unknown as Settings;
+  return diffSettings(d, wrap(a), wrap(b));
 }
 
 /** Deep copy of plain JSON data. */
@@ -240,7 +266,7 @@ export function describeData(p: Payload): string {
   const notes = p.household.partners.filter((x) => x.take_home_note)
       .map((x) => `${x.name} (${x.take_home_note})`);
   if (notes.length) s += ` Take-home pay: ${notes.join(', ')}.`;
-  return `${s} Change any number in the planner to see what it does to the month.`;
+  return `${s} Change any number in Budgeting to see what it does to the month.`;
 }
 
 // ---------- the monthly budget ----------
@@ -266,25 +292,17 @@ export function oneTimeNet(d: Data, st: PlannerState, i: number): number {
   return d.avg(i) - sum(off.map((c) => d.credAvg(c)));
 }
 
-/** Monthly amount of toggled-on cost categories (net of nested credits). */
-function costMo(d: Data, st: PlannerState, list: number[], ret: boolean): number {
-  return sum(list.filter((i) => st.on[d.cats[i].name] && (!ret || d.cats[i].in_retirement))
-      .map((i) => oneTimeNet(d, st, i)));
+/** Annual expenses per month: the budget's yearly list ÷ 12. */
+export function annualMo(st: PlannerState): number {
+  return sum((st.annual ?? []).map((a) => a.amt)) / 12;
 }
 
-/** Tax set-aside per month (annual / one-time costs marked tax, net of nested credits). */
-export function taxMo(d: Data, st: PlannerState, ret = false): number {
-  return costMo(d, st, [...d.annual, ...d.oneTime].filter((i) => d.cats[i].tax), ret);
-}
-
-/** Non-tax annual expenses and 1-time purchases that are toggled on. */
-export function extraMo(d: Data, st: PlannerState, ret = false): number {
-  return costMo(d, st, [...d.annual, ...d.oneTime].filter((i) => !d.cats[i].tax), ret);
-}
-
-/** Emergency costs per month (paid from the emergency funds when there are any). */
-export function emergencyMo(d: Data, st: PlannerState, ret = false): number {
-  return costMo(d, st, d.emergency, ret);
+/**
+ * Emergency fund costs per month: the budget's number, or (when empty) what goes into the
+ * emergency funds, so by default they neither grow nor shrink.
+ */
+export function emergencyMo(d: Data, st: PlannerState): number {
+  return budget(d, st).emergency;
 }
 
 /** Take-home income per month. */
@@ -294,14 +312,14 @@ export function incomeMo(st: PlannerState): number {
 
 /** A planner contribution line from a config entry. */
 export function savLine(c: Contribution): SavLine {
-  return {mode: c.left_pct == null ? 'fixed' : 'pct', amt: c.monthly, pct: c.left_pct ?? 0,
-    min: c.min_monthly, max: c.max_monthly};
+  return {mode: c.rest ? 'rest' : c.left_pct == null ? 'fixed' : 'pct', amt: c.monthly,
+    pct: c.left_pct ?? 0, min: c.min_monthly, max: c.max_monthly};
 }
 
 /**
  * Splits what is free each month between contribution lines. Fixed lines come off first; every
  * percent line then takes its share of what remains (the same base for all of them), kept between
- * its min and max.
+ * its min and max; 'rest' lines split whatever is still left evenly.
  * @param lines [key, line] pairs that are contributing this month.
  * @param free Income minus spending and taxes.
  * @return Amount per key and what is left over after all of them.
@@ -311,7 +329,7 @@ export function contributions(lines: Array<[string, SavLine|undefined]>, free: n
   const amt: Record<string, number> = {};
   let base = free;
   lines.forEach(([k, l]) => {
-    if (l && l.mode !== 'pct') {
+    if (l && l.mode !== 'pct' && l.mode !== 'rest') {
       amt[k] = l.amt;
       base -= l.amt;
     }
@@ -324,6 +342,12 @@ export function contributions(lines: Array<[string, SavLine|undefined]>, free: n
     if (l.max != null) v = Math.min(v, l.max);
     amt[k] = v;
     left -= v;
+  });
+  const rest = lines.filter(([, l]) => l?.mode === 'rest');
+  const share = rest.length ? Math.max(0, left) / rest.length : 0;
+  rest.forEach(([k]) => {
+    amt[k] = share;
+    left -= share;
   });
   return {amt, left};
 }
@@ -339,31 +363,30 @@ export interface Budget {
   income: number;
   regular: number;
   credits: number;
-  extra: number;
+  annual: number;
   emergency: number;
   spend: number;
   savings: number;
   investing: number;
-  tax: number;
   amt: Record<string, number>;
   overflow: Record<string, string>;
   left: number;
 }
 
 /**
- * The monthly budget for planner settings. Emergency costs are paid from the emergency funds
- * (so they are not in spending) unless there is no emergency fund. A savings account already at
- * its max sends its contribution to its overflow investment.
+ * The monthly budget. Spending is planned categories minus ticked credits; annual expenses are
+ * the yearly list ÷ 12. Emergency fund costs are paid from the emergency funds (so they are not
+ * in spending) unless there is no emergency fund. A savings account already at its max sends its
+ * contribution to its overflow investment.
  */
 export function budget(d: Data, st: PlannerState): Budget {
   const income = incomeMo(st);
   const regular = regularMo(d, st);
   const credits = creditsMo(d, st);
-  const extra = extraMo(d, st);
-  const emergency = emergencyMo(d, st);
-  const spend = regular - credits + extra + (d.funds.length ? 0 : emergency);
-  const tax = taxMo(d, st);
-  const {amt, left} = contributions(d.savKeys.map((k) => [k, st.sav[k]]), income - spend - tax);
+  const annual = annualMo(st);
+  const spend = regular - credits + (d.funds.length ? 0 : st.emerg ?? 0);
+  const {amt, left} = contributions(d.savKeys.map((k) => [k, st.sav[k]]), income - spend - annual);
+  const emergency = st.emerg ?? sum(d.funds.map((f) => amt[`sav:${f.id}`] ?? 0));
   const overflow: Record<string, string> = {};
   d.p.savings.forEach((sv) => {
     const to = overflowTarget(d, sv);
@@ -372,8 +395,8 @@ export function budget(d: Data, st: PlannerState): Budget {
   const isInv = (k: string) => k.startsWith('inv:') || k in overflow;
   const investing = sum(Object.entries(amt).filter(([k]) => isInv(k)).map(([, v]) => v));
   const savings = sum(Object.entries(amt).filter(([k]) => !isInv(k)).map(([, v]) => v));
-  return {income, regular, credits, extra, emergency, spend, savings, investing, tax, amt,
-    overflow, left};
+  return {income, regular, credits, annual, emergency, spend, savings, investing, amt, overflow,
+    left};
 }
 
 // ---------- college ----------
@@ -458,9 +481,19 @@ export function interpolatePension(est: Record<string, number>, age: number, age
   return vL * (serviceNow + age - ageNow) / (serviceNow + aL - ageNow);
 }
 
+/** Savings accounts (not emergency funds) that become retirement income. */
+export function retireSavings(d: Data): SavingsAccount[] {
+  return d.p.savings.filter((s) => s.type === 'savings');
+}
+
+/** An account's yearly withdrawal % (its own, or the default). */
+export function drawPct(rs: RetireState, key: string): number {
+  return rs.draw?.[key] ?? rs.wd;
+}
+
 /** One income source at retirement. */
 export interface IncomePart {
-  kind: 'pension'|'account'|'investment'|'ss';
+  kind: 'pension'|'account'|'investment'|'savings'|'ss';
   key: string;
   name: string;
   partner: string;
@@ -550,7 +583,7 @@ export interface YearSpend {
   ret: boolean;
   cats: Record<string, number>;
   living: number;
-  tax: number;
+  annual: number;
   health: number;
   emergency: number;
   short: number;
@@ -661,7 +694,10 @@ export function simulate(d: Data, s: Settings, a = s.rs.age): Sim {
     let f = flows.get(y);
     if (!f) {
       const x = spendingAt(d, s, y, RY);
-      if (y >= RY && !inv) inv = investmentParts(d, s, base.yrs, snapshot('inv:'));
+      if (y >= RY && !inv) {
+        snapshot('inv:');
+        inv = investmentParts(d, s, base.yrs, snapshot('sav:'));
+      }
       const income = incomeFrom(d, s, {...base, parts: [...base.parts, ...(inv ?? [])]}, y);
       f = {free: income - x.spend, emergency: x.emergency};
       flows.set(y, f);
@@ -678,7 +714,10 @@ export function simulate(d: Data, s: Settings, a = s.rs.age): Sim {
     accts.forEach((x) => {
       if (x.key.startsWith('529:') && m === x.until) at[x.key] = x.bal;
     });
-    if (m === invMonth) snapshot('inv:');
+    if (m === invMonth) {
+      snapshot('inv:');
+      snapshot('sav:');
+    }
     const f = flowsAt(y);
     let need = f.emergency;
     accts.filter((x) => x.fund).forEach((x) => {
@@ -746,9 +785,9 @@ export function deflator(d: Data, s: Settings, y: number): number {
   return s.fs.nominal ? Math.pow(1 + s.rs.inf / 100, y - d.todayYear) : 1;
 }
 
-/** Monthly spending today (planned, after credits, plus tax set-aside). */
+/** Monthly spending today (planned, after credits, plus annual expenses). */
 export function spendToday(d: Data, st: PlannerState): number {
-  return regularMo(d, st) - creditsMo(d, st) + taxMo(d, st);
+  return regularMo(d, st) - creditsMo(d, st) + annualMo(st);
 }
 
 // ---------- comparing scenarios ----------
@@ -770,7 +809,7 @@ export function results(d: Data, s: Settings): ResultRow[] {
   const rows: ResultRow[] = [
     ['Monthly budget today', null],
     ['Take-home income', b.income, 1], ['Spending (net)', b.spend, -1],
-    ['Savings', b.savings, 0], ['Investing', b.investing, 0], ['Tax set-aside', b.tax, -1],
+    ['Savings', b.savings, 0], ['Investing', b.investing, 0], ['Annual expenses', b.annual, -1],
     ['Left over each month', b.left, 1], ['Left over each year', b.left * 12, 1],
     ['Before retirement', null],
   ];
@@ -850,6 +889,8 @@ export function settingLabel(d: Data, path: string[]): string {
       return `${name}: ${what[leaf] ?? leaf}`;
     }
     if (k === 'on') return catLabel(sub);
+    if (k === 'annual') return 'Annual expenses';
+    if (k === 'emerg') return 'Emergency fund costs / mo';
     if (k === 'plan') return `Planned: ${sub}`;
   }
   if (g === 'cs') {
@@ -877,6 +918,14 @@ export function settingLabel(d: Data, path: string[]): string {
       const name = d.p.investments.find((x) => x.id === sub)?.name ?? sub;
       return `${name}: ${leaf === 'bal' ? 'balance today' : 'return'}`;
     }
+    if (k === 'draw') {
+      const [kind, ...rest] = sub.split(':');
+      const id = rest.join(':');
+      const name = kind === 'acct' ? accountName(id) : kind === 'inv' ?
+          d.p.investments.find((x) => x.id === id)?.name ?? id :
+          d.p.savings.find((x) => x.id === id)?.name ?? id;
+      return `${name}: yearly withdrawal`;
+    }
   }
   if (g === 'fs') {
     if (k === 'kg') return `Kids-gone change: ${sub}`;
@@ -890,11 +939,20 @@ export function settingLabel(d: Data, path: string[]): string {
 /** A readable value for a settings path. */
 export function settingVal(d: Data, path: string[], v: unknown): string {
   if (v === undefined) return '–';
+  if (Array.isArray(v)) {
+    const total = sum(v.map((x: {amt: number}) => x.amt));
+    return `${v.length} item${v.length === 1 ? '' : 's'}, ${d.p.plan.currency_symbol}${
+        Math.round(total).toLocaleString('en-US')}/yr`;
+  }
   if (v === null) {
     if (path[1] === 'sav') return 'none';
+    if (path[1] === 'emerg') return 'same as the fund contribution';
+    if (path[1] === 'draw') return 'the default rate';
     return path[1] === 'ages' ? `same year as ${d.primary.name}` : 'at retirement';
   }
-  if (path[1] === 'sav' && path[3] === 'mode') return v === 'pct' ? '% of left-over' : 'fixed';
+  if (path[1] === 'sav' && path[3] === 'mode') {
+    return v === 'pct' ? '% of left-over' : v === 'rest' ? 'the rest' : 'fixed';
+  }
   if (typeof v === 'boolean') return v ? 'On' : 'Off';
   if (path[0] === 'cs' && path[2] === 'school') {
     return d.p.assumptions.college.schools[String(v)]?.name ?? String(v);
@@ -949,7 +1007,7 @@ export function expand(d: Data, c: {d?: Array<[string[], unknown]>}): Settings {
 //
 const SIM_CACHE = new WeakMap<Data, Map<string, Sim>>();
 const SKIP = new Set([JSON.stringify(['fs', 'nominal'])]);
-const PCT_KEYS = new Set(['raise', 'ret', 'inf', 'wd', 'tax']);
+const PCT_KEYS = new Set(['raise', 'ret', 'inf', 'wd', 'tax', 'draw']);
 
 /** Whether a settings path holds a percentage. */
 function isPct(path: string[]): boolean {
@@ -988,7 +1046,6 @@ function baseRetirement(d: Data, s: Settings, a: number):
       partnerRetireAge(d, rs, p, a) - p.age));
   const r = rs.ret / 100;
   const real = (y: number) => Math.pow(1 + rs.inf / 100, y);
-  const wd = rs.wd / 100 / 12;
   const parts: IncomePart[] = [];
   const ages: Record<string, number> = {};
   const years: Record<string, number> = {};
@@ -1013,7 +1070,8 @@ function baseRetirement(d: Data, s: Settings, a: number):
       const st = rs.acct[key];
       if (!st?.on) return;
       const bal = fv(st.bal, st.monthly, Math.round(pYrs * 12), r);
-      parts.push({kind: 'account', key, name: ac.name, partner: p.id, value: bal / real(pYrs) * wd,
+      const w = drawPct(rs, `acct:${key}`) / 100 / 12;
+      parts.push({kind: 'account', key, name: ac.name, partner: p.id, value: bal / real(pYrs) * w,
         balance: bal, yrs: pYrs, started: true});
     });
   });
@@ -1033,18 +1091,25 @@ function baseRetirement(d: Data, s: Settings, a: number):
   return {age: a, yrs, year, years, ages, parts};
 }
 
-/** Investment income from balances at retirement (keys inv:<id>). */
+/**
+ * Investment and savings-account income from balances at retirement (keys inv:<id>, sav:<id>),
+ * each at its own withdrawal rate.
+ */
 function investmentParts(d: Data, s: Settings, yrs: number, bals: Record<string, number>):
     IncomePart[] {
   const real = Math.pow(1 + s.rs.inf / 100, yrs);
-  const wd = s.rs.wd / 100 / 12;
   const out: IncomePart[] = [];
-  d.p.investments.forEach((v) => {
-    const bal = bals[`inv:${v.id}`] ?? 0;
-    if (!s.rs.inv[v.id] || bal <= 0) return;
-    out.push({kind: 'investment', key: v.id, name: v.name, partner: '', value: bal / real * wd,
+  const add = (kind: 'investment'|'savings', id: string, name: string) => {
+    const key = `${kind === 'investment' ? 'inv' : 'sav'}:${id}`;
+    const bal = bals[key] ?? 0;
+    if (bal <= 0) return;
+    out.push({kind, key: id, name, partner: '', value: bal / real * drawPct(s.rs, key) / 100 / 12,
       balance: bal, yrs, started: true});
+  };
+  d.p.investments.forEach((v) => {
+    if (s.rs.inv[v.id]) add('investment', v.id, v.name);
   });
+  retireSavings(d).forEach((sv) => add('savings', sv.id, sv.name));
   return out;
 }
 
@@ -1056,7 +1121,8 @@ function incomeFrom(d: Data, s: Settings, R: Pick<RetireResult, 'year'|'years'|'
   const pay = sum(d.partners.filter((p) => y < R.years[p.id]).map((p) =>
       (st.inc[p.id] ?? 0) * Math.pow(1 + (rs.raise[p.id] ?? 0) / 100, n))) +
       (y < R.year ? st.inc.other ?? 0 : 0);
-  const paid = sum(R.parts.filter((x) => x.kind === 'investment' ? y >= R.year :
+  const paid = sum(R.parts.filter((x) => x.kind === 'investment' || x.kind === 'savings' ?
+      y >= R.year :
       y >= R.years[x.partner] && (x.kind !== 'ss' || y >= (x.start ?? 0))).map((x) => x.value));
   return pay + paid * (1 - fs.tax / 100);
 }
@@ -1079,10 +1145,10 @@ function spendingAt(d: Data, s: Settings, y: number, retYear: number):
     cats[n] = v;
     living += v;
   });
-  const em = emergencyMo(d, st, ret);
-  living += extraMo(d, st, ret) - creditsMo(d, st, ret) + (d.funds.length ? 0 : em);
-  const tax = taxMo(d, st, ret);
+  const em = emergencyMo(d, st);
+  living += -creditsMo(d, st, ret) + (d.funds.length ? 0 : em);
+  const annual = annualMo(st);
   const health = ret ? fs.health : 0;
-  return {y, kids, ret, cats, living, tax, health, emergency: d.funds.length ? em : 0,
-    spend: living + tax + health};
+  return {y, kids, ret, cats, living, annual, health, emergency: d.funds.length ? em : 0,
+    spend: living + annual + health};
 }
