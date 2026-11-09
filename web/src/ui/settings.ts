@@ -332,6 +332,9 @@ function partnerForm(i: number|null, partners: Dict[], saveHH: () => Promise<voi
               'From the Social Security statement')}
       ${select('social_security.claim_age', 'Claims Social Security at', [['', 'When retiring (62+)'],
         ...CLAIM_AGES.map((a) => [String(a), String(a)] as [string, string])], ss.claim_age ?? '')}
+      ${input('retirement_age', 'Retires at (age)', p.retirement_age ?? '', 'number',
+              i === 0 ? 'Empty: the starting age under Assumptions' :
+                  'Empty: the same year as the first partner', 'data-optional')}
     </div>
     <div class="subhead">Pensions</div>
     ${listEditor('pensions', (p.pensions as Dict[]) ?? [], pensionRow, '+ Add pension')}
@@ -350,6 +353,7 @@ function partnerForm(i: number|null, partners: Dict[], saveHH: () => Promise<voi
       }),
       accounts: readRows(form, 'accounts')};
     if (!top.take_home_note) delete next.take_home_note;
+    if (top.retirement_age === undefined || top.retirement_age === '') delete next.retirement_age;
     const list = partners.slice();
     if (i === null) list.push(next);
     else list[i] = next;
