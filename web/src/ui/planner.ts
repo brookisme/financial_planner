@@ -1,34 +1,40 @@
 /**
- * @fileoverview The summary strip and the monthly planner: category table (grouped, with credit
- * sub-rows), income, savings (fixed or a share of the left-over) and the cost toggles (annual
- * expenses, 1-time purchases, emergency fund costs).
+ * @fileoverview Budgeting: the category table (Planned / mo, a Compare
+ * column and the difference, with credit sub-rows and a summary of annual expenses, emergency
+ * costs and savings), income, savings (fixed, a share of the left-over or the rest), the annual
+ * expenses list and emergency fund costs.
  *
  * License: BSD 3-Clause
  */
 
-import {$, app, changed, num, onChange, scrollToEl} from '../app';
-import {esc, fk, fmt, sum} from '../format';
-import {budget, clone, COST_KINDS, oneTimeNet, overflowTarget, simulate} from '../model';
-import type {SavLine} from '../types';
-import {selectCat} from './explorer';
+import {$, $in, app, changed, num, onChange, scrollToEl} from '../app';
+import {esc, fmt, sum} from '../format';
+import {budget, clone, overflowTarget, rebaseBudget, simulate} from '../model';
+import type {PlannerState, SavLine} from '../types';
+import {savedBudgets} from './budgets';
+import {selectCat, selectionAvg, selectionLabel} from './spending';
 
 //
 // PUBLIC
 //
 
-/** Builds the planner for the loaded data. */
+/** Builds Budgeting for the loaded data. */
 export function buildPlanner(): void {
   const d = app.d;
-  $('avg-head').textContent = `${d.n}-mo avg`;
-  $('planner-sub').textContent =
-      `Starts at each category's ${d.n}-month average. Type a new number to try a change.`;
+  $('planner-sub').textContent = `Planned / mo starts at each category's ${d.n}-month ` +
+      'average. Type a new number to try a change, and save it as a budget.';
   buildTable();
   buildSide();
+  $('cmp-sel').addEventListener('change', () => {
+    cmpKey = ($('cmp-sel') as HTMLSelectElement).value;
+    update();
+  });
+  refreshCompare();
   onChange(update);
   update();
 }
 
-/** Fills every input from the settings (after loading a scenario or resetting). */
+/** Fills every input from the settings (after loading a budget or resetting). */
 export function fillPlanner(): void {
   const {d, S} = app;
   const plan = (i: number) => {
@@ -47,13 +53,33 @@ export function fillPlanner(): void {
     const v = S.st.sav[el.dataset.sav!]?.[el.dataset.f as keyof SavLine];
     el.value = v == null ? '' : String(v);
   });
+  $in('em-amt').value = S.st.emerg == null ? '' : String(S.st.emerg);
+  renderAnnual();
+}
+
+/** Rebuilds the Compare choices (12-month average and every saved budget). */
+export function refreshCompare(): void {
+  const sel = $('cmp-sel') as HTMLSelectElement;
+  const list = savedBudgets();
+  if (cmpKey !== 'avg' && !list.some((b) => b.id === cmpKey)) cmpKey = 'avg';
+  sel.innerHTML = `<option value="avg">${app.d.n}-mo avg</option>` + list.map((b) =>
+      `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('');
+  sel.value = cmpKey;
+  if (document.getElementById('psum')?.childElementCount) update();
 }
 
 //
 // INTERNAL
 //
+let cmpKey = 'avg';
 
-/** The category table with group headings, credit sub-rows and totals. */
+/** The planner settings in the Compare column. */
+function compareSt(): PlannerState {
+  const b = savedBudgets().find((x) => x.id === cmpKey);
+  return b ? rebaseBudget(app.defs.st, b.st, b.base) : app.defs.st;
+}
+
+/** The category table with group headings, credit sub-rows, totals and the summary. */
 function buildTable(): void {
   const d = app.d;
   const groups: string[] = [];
@@ -61,39 +87,30 @@ function buildTable(): void {
     if (!groups.includes(d.cats[i].group)) groups.push(d.cats[i].group);
   });
   let h = '';
-  const range = (i: number, sign = 1) => {
-    const v = d.byCat[i].map((x) => x * sign);
-    return `${fk(Math.min(...v))} – ${fk(Math.max(...v))}`;
-  };
   groups.forEach((g) => {
-    h += `<tr class="group"><td colspan="5">${esc(g)}</td></tr>`;
+    h += `<tr class="group"><td colspan="4">${esc(g)}</td></tr>`;
     d.regular.filter((i) => d.cats[i].group === g).sort((a, b) => d.avg(b) - d.avg(a))
         .forEach((i) => {
           const subs = d.offsetsOf(d.cats[i].name).filter((c) => d.isPlannerCredit(c));
           h += `<tr><td><button class="cat-link" data-cat="${i}" type="button">${
               esc(d.cats[i].name)}</button>${subs.length ?
               ' <span class="small muted">expenses</span>' : ''}</td>
-            <td class="num">${fmt(d.avg(i))}</td><td class="range num">${range(i)}</td>
             <td><input class="amt" type="number" step="25" inputmode="decimal" id="p-${i}"
               data-cat="${i}" aria-label="Planned monthly ${esc(d.cats[i].name)}"></td>
-            <td><span class="delta num" id="d-${i}"></span></td></tr>`;
+            <td class="num" id="c-${i}"></td><td><span class="delta num" id="d-${i}"></span></td></tr>`;
           if (subs.length) {
-            h += subs.map((c) => creditRow(c, range(c, -1))).join('') +
+            h += subs.map(creditRow).join('') +
                 `<tr class="subtot"><td style="padding-left:22px">${esc(d.cats[i].name)}, net</td>
-                <td class="num" id="net-avg-${i}"></td><td></td>
-                <td class="num" id="net-plan-${i}" style="padding-right:14px"></td><td></td></tr>`;
+                <td class="num" id="net-p-${i}" style="padding-right:14px"></td>
+                <td class="num" id="net-c-${i}"></td><td></td></tr>`;
           }
         });
   });
-  h += `<tr class="total"><td>Total regular spending</td><td class="num" id="t-avg"></td><td></td>
-    <td class="num" id="t-plan" style="padding-right:14px"></td>
+  h += `<tr class="total"><td>Total regular spending</td>
+    <td class="num" id="t-p" style="padding-right:14px"></td><td class="num" id="t-c"></td>
     <td><span class="delta num" id="t-d"></span></td></tr>`;
   const loose = d.credits.filter((c) => d.isPlannerCredit(c) && !d.cats[c].offsets);
-  if (loose.length) {
-    h += loose.map((c) => creditRow(c, range(c, -1))).join('') +
-        `<tr class="total"><td>Net spending</td><td class="num" id="n-avg"></td><td></td>
-        <td class="num" id="n-plan" style="padding-right:14px"></td><td></td></tr>`;
-  }
+  if (loose.length) h += loose.map(creditRow).join('');
   const body = $('ptbody');
   body.innerHTML = h;
   body.querySelectorAll<HTMLInputElement>('input.amt').forEach((inp) => {
@@ -107,13 +124,20 @@ function buildTable(): void {
   body.querySelectorAll<HTMLButtonElement>('.cat-link').forEach((b) => {
     b.addEventListener('click', () => {
       selectCat(+b.dataset.cat!);
-      scrollToEl($('explore'));
+      scrollToEl($('spending'));
     });
   });
+  const sumRow = (id: string, label: string, cls = '') => `<tr class="${cls}"><td>${label}</td>
+    <td class="num" id="sp-${id}" style="padding-right:14px"></td><td class="num" id="sc-${id}"></td>
+    <td><span class="delta num" id="sd-${id}"></span></td></tr>`;
+  $('psum').innerHTML = sumRow('net', 'Net spending') + sumRow('an', 'Annual expenses') +
+      sumRow('em', 'Emergency fund costs <span class="small muted" id="em-how"></span>') +
+      savLabels().map(([k, label]) => sumRow(k.replace(':', '-'), esc(label))).join('') +
+      sumRow('tot', 'Monthly total, spending + savings', 'total');
 }
 
 /** A credit row with its on/off toggle. */
-function creditRow(c: number, range: string): string {
+function creditRow(c: number): string {
   const cat = app.d.cats[c];
   const name = cat.label || cat.name;
   return `<tr class="credit" id="row-${c}"><td style="padding-left:22px">
@@ -121,13 +145,20 @@ function creditRow(c: number, range: string): string {
       data-tg="${esc(cat.name)}"><span>− <button class="cat-link" data-cat="${c}" type="button">${
       esc(name)}</button>${cat.note ? ` <span class="small muted">${esc(cat.note)}</span>` : ''}
     </span></label></td>
-    <td class="num">(${fmt(app.d.credAvg(c))})</td><td class="range num">${range}</td>
     <td><input class="amt" type="number" step="25" inputmode="decimal" id="p-${c}" data-cat="${c}"
       aria-label="Planned monthly ${esc(name)}"></td>
-    <td><span class="delta num" id="d-${c}"></span></td></tr>`;
+    <td class="num" id="c-${c}"></td><td><span class="delta num" id="d-${c}"></span></td></tr>`;
 }
 
-/** Wires checkboxes with data-tg (category toggles). */
+/** Every savings line as [key, label]. */
+function savLabels(): Array<[string, string]> {
+  const d = app.d;
+  return [...d.children.map((c): [string, string] => [`529:${c.id}`, `529, ${c.name}`]),
+    ...d.p.savings.map((s): [string, string] => [`sav:${s.id}`, s.name]),
+    ...d.p.investments.map((v): [string, string] => [`inv:${v.id}`, v.name])];
+}
+
+/** Wires checkboxes with data-tg (credit toggles). */
 function bindToggles(root: HTMLElement): void {
   root.querySelectorAll<HTMLInputElement>('[data-tg]').forEach((el) => {
     el.addEventListener('change', () => {
@@ -137,7 +168,7 @@ function bindToggles(root: HTMLElement): void {
   });
 }
 
-/** Income, savings and cost panels. */
+/** Income, savings, annual expenses and emergency fund panels. */
 function buildSide(): void {
   const {d} = app;
   const p = d.p;
@@ -157,17 +188,10 @@ function buildSide(): void {
     d.children.length ? '529 contributions stop at each child\'s high school graduation.' : '',
     p.investments.length ? 'Investments are added to their balance in Retirement and stop at ' +
         'retirement.' : '',
-    '"% left" puts in a share of what is left each month after spending, taxes and the fixed ' +
-        'amounts.',
+    'Fixed amounts come off first; "% left" takes a share of what is left after spending, ' +
+        'annual expenses and the fixed amounts; "rest" splits whatever is still left evenly.',
   ].filter(Boolean).join(' ');
-  COST_KINDS.forEach((k) => {
-    const list = k === 'annual' ? d.annual : k === 'one_time' ? d.oneTime : d.emergency;
-    const panel = $(`cost-${k}`);
-    panel.hidden = !list.length;
-    panel.querySelector('.cost-rows')!.innerHTML = list.map(costToggle).join('');
-  });
   const side = $('sav-rows').closest('.side') as HTMLElement;
-  bindToggles(side);
   side.querySelectorAll<HTMLInputElement>('[data-inc]').forEach((el) => {
     el.addEventListener('input', () => {
       app.S.st.inc[el.dataset.inc!] = num(el);
@@ -189,6 +213,12 @@ function buildSide(): void {
       changed();
     });
   });
+  wireAnnual();
+  $in('em-amt').addEventListener('input', () => {
+    const el = $in('em-amt');
+    app.S.st.emerg = el.value === '' ? null : num(el);
+    changed();
+  });
   const flex = d.regular.filter((i) => d.cats[i].flexible);
   $('trim').hidden = !flex.length;
   $('trim-note').textContent = (flex.length ? `Flexible spending = ${
@@ -199,6 +229,19 @@ function buildSide(): void {
     fillPlanner();
     changed();
   });
+  const fill = $('fill');
+  fill.addEventListener('mouseenter', () => {
+    fill.title = `Set Planned / mo to the averages for ${selectionLabel()}, the period shown in ` +
+        'Spending';
+  });
+  fill.addEventListener('click', () => {
+    [...d.regular, ...d.credits.filter((c) => d.isPlannerCredit(c))].forEach((i) => {
+      app.S.st.plan[d.cats[i].name] = Math.round(selectionAvg(i));
+    });
+    fillPlanner();
+    changed();
+    $('trim-note').textContent = `Filled from Spending: ${selectionLabel()}.`;
+  });
   $('trim').addEventListener('click', () => {
     flex.forEach((i) => app.S.st.plan[d.cats[i].name] = Math.round(d.avg(i) * 0.9));
     fillPlanner();
@@ -207,65 +250,100 @@ function buildSide(): void {
   fillPlanner();
 }
 
-/** Recomputes deltas, totals and the strip. */
+/** The annual expenses list: one row per item (label, yearly amount, remove). */
+function renderAnnual(): void {
+  $('an-rows').innerHTML = (app.S.st.annual ?? []).map((a, i) => `<div class="an-row"
+    data-i="${i}"><input type="text" data-af="name" value="${esc(a.name)}" placeholder="e.g. Taxes"
+    aria-label="Annual expense name"><input class="amt" type="number" step="100" inputmode="decimal"
+    data-af="amt" value="${a.amt}" aria-label="${esc(a.name || 'Annual expense')} per year"><button
+    class="btn sm" type="button" data-arm aria-label="Remove ${esc(a.name || 'this expense')}">×</button>
+    </div>`).join('') || '<p class="small muted">No annual expenses. Add taxes, insurance…</p>';
+}
+
+/** Edits, adds and removes annual expenses. */
+function wireAnnual(): void {
+  const rows = $('an-rows');
+  rows.addEventListener('input', (e) => {
+    const el = e.target as HTMLInputElement;
+    const i = +(el.closest('[data-i]') as HTMLElement).dataset.i!;
+    const item = app.S.st.annual[i];
+    if (el.dataset.af === 'name') item.name = el.value;
+    else item.amt = num(el);
+    changed();
+  });
+  rows.addEventListener('click', (e) => {
+    const b = (e.target as HTMLElement).closest('[data-arm]');
+    if (!b) return;
+    const i = +(b.closest('[data-i]') as HTMLElement).dataset.i!;
+    app.S.st.annual.splice(i, 1);
+    renderAnnual();
+    changed();
+  });
+  $('an-add').addEventListener('click', () => {
+    app.S.st.annual.push({name: '', amt: 0});
+    renderAnnual();
+    changed();
+    (rows.querySelector('.an-row:last-child input') as HTMLInputElement|null)?.focus();
+  });
+}
+
+/** Recomputes the compare column, differences, totals, savings and the strip. */
 function update(): void {
   const {d, S} = app;
   const st = S.st;
-  let tAvg = 0;
-  let tPlan = 0;
-  const setDelta = (i: number, a: number, p: number, goodUp: boolean) => {
-    const dv = Math.abs(p - a) < 0.5 ? 0 : Math.round(p - a);
-    const el = $(`d-${i}`);
+  const cs = compareSt();
+  const setDiff = (el: HTMLElement, p: number, c: number, goodUp: boolean) => {
+    const dv = Math.abs(p - c) < 0.5 ? 0 : Math.round(p - c);
     el.textContent = dv ? (dv > 0 ? '+' : '−') + fmt(Math.abs(dv)) : '';
-    el.className = `delta num ${dv > 0 === goodUp ? 'pos' : 'neg'}`;
-    if (!dv) el.className = 'delta num';
+    el.className = dv ? `delta num ${dv > 0 === goodUp ? 'pos' : 'neg'}` : 'delta num';
+    return dv;
+  };
+  const cell = (i: number, goodUp: boolean) => {
+    const n = d.cats[i].name;
+    const p = st.plan[n] ?? 0;
+    const c = cs.plan[n] ?? 0;
+    $(`c-${i}`).textContent = fmt(c);
+    const dv = setDiff($(`d-${i}`), p, c, goodUp);
     $(`p-${i}`).classList.toggle('changed', !!dv);
   };
-  d.regular.forEach((i) => {
-    const a = d.avg(i);
-    const p = st.plan[d.cats[i].name] ?? 0;
-    tAvg += a;
-    tPlan += p;
-    setDelta(i, a, p, false);
-  });
+  d.regular.forEach((i) => cell(i, false));
   d.credits.filter((c) => d.isPlannerCredit(c)).forEach((c) => {
-    setDelta(c, d.credAvg(c), st.plan[d.cats[c].name] ?? 0, true);
+    cell(c, true);
     $(`row-${c}`).classList.toggle('pane-off', !st.on[d.cats[c].name]);
   });
+  const net = (s: PlannerState, i: number) => (s.plan[d.cats[i].name] ?? 0) -
+      sum(d.offsetsOf(d.cats[i].name).filter((c) => s.on[d.cats[c].name])
+          .map((c) => s.plan[d.cats[c].name] ?? 0));
   d.regular.forEach((i) => {
-    const el = document.getElementById(`net-avg-${i}`);
+    const el = document.getElementById(`net-p-${i}`);
     if (!el) return;
-    const subs = d.offsetsOf(d.cats[i].name).filter((c) => st.on[d.cats[c].name]);
-    el.textContent = fmt(d.avg(i) - sum(subs.map((c) => d.credAvg(c))));
-    $(`net-plan-${i}`).textContent = fmt((st.plan[d.cats[i].name] ?? 0) -
-        sum(subs.map((c) => st.plan[d.cats[c].name] ?? 0)));
+    el.textContent = fmt(net(st, i));
+    $(`net-c-${i}`).textContent = fmt(net(cs, i));
   });
-  const onCredits = d.credits.filter((c) => d.isPlannerCredit(c) && st.on[d.cats[c].name]);
-  if (document.getElementById('n-avg')) {
-    $('n-avg').textContent = fmt(tAvg - sum(onCredits.map((c) => d.credAvg(c))));
-    $('n-plan').textContent = fmt(tPlan - sum(onCredits.map((c) => st.plan[d.cats[c].name] ?? 0)));
-  }
-  const dT = Math.abs(tPlan - tAvg) < 0.5 ? 0 : Math.round(tPlan - tAvg);
-  $('t-avg').textContent = fmt(tAvg);
-  $('t-plan').textContent = fmt(tPlan);
-  const td = $('t-d');
-  td.textContent = dT ? (dT > 0 ? '+' : '−') + fmt(Math.abs(dT)) : '';
-  td.className = `delta num ${dT > 0 ? 'neg' : dT < 0 ? 'pos' : ''}`;
-  d.costs.forEach((i) => {
-    const el = document.getElementById(`ot-net-${i}`);
-    if (el) el.textContent = fmt(oneTimeNet(d, st, i));
-    const on = !!st.on[d.cats[i].name];
-    document.querySelectorAll<HTMLInputElement>(`[data-parent="${CSS.escape(d.cats[i].name)}"]`)
-        .forEach((sub) => {
-          sub.disabled = !on;
-          sub.parentElement!.classList.toggle('pane-off', !on);
-        });
-  });
+  const reg = (s: PlannerState) => sum(d.regular.map((i) => s.plan[d.cats[i].name] ?? 0));
+  $('t-p').textContent = fmt(reg(st));
+  $('t-c').textContent = fmt(reg(cs));
+  setDiff($('t-d'), reg(st), reg(cs), false);
+  const bp = budget(d, st);
+  const bc = budget(d, cs);
+  const sumLine = (id: string, p: number, c: number, goodUp: boolean) => {
+    $(`sp-${id}`).textContent = fmt(p);
+    $(`sc-${id}`).textContent = fmt(c);
+    setDiff($(`sd-${id}`), p, c, goodUp);
+  };
+  const fund = d.funds.length > 0;
+  sumLine('net', bp.spend - (fund ? 0 : bp.emergency), bc.spend - (fund ? 0 : bc.emergency), false);
+  sumLine('an', bp.annual, bc.annual, false);
+  sumLine('em', bp.emergency, bc.emergency, false);
+  $('em-how').textContent = fund ? '(paid from the fund, not in the total)' : '';
+  savLabels().forEach(([k]) => sumLine(k.replace(':', '-'), bp.amt[k] ?? 0, bc.amt[k] ?? 0, true));
+  const total = (b: typeof bp) => b.spend + b.annual + b.savings + b.investing;
+  sumLine('tot', total(bp), total(bc), false);
+  $('an-total').textContent = `${fmt(sum(st.annual.map((a) => a.amt)))}/yr · ${fmt(bp.annual)}/mo`;
   updateSavings();
-  updateStrip();
 }
 
-/** One contribution line: a fixed amount, or a percent of the left-over with min / max. */
+/** One contribution line: a fixed amount, a percent of the left-over with min / max, or the rest. */
 function savRow(key: string, label: string, note = ''): string {
   const k = esc(key);
   if (label.toLowerCase().includes(note)) note = '';
@@ -276,33 +354,14 @@ function savRow(key: string, label: string, note = ''): string {
       ` <span class="small muted">· ${esc(note)}</span>` : ''}</span><span class="ctls"><span
       class="seg sm" role="group" aria-label="${esc(label)} contribution type"><button
       type="button" data-key="${k}" data-mode="fixed">$/mo</button><button type="button"
-      data-key="${k}" data-mode="pct">% left</button></span><span data-show="fixed">${
-      inp('amt', 'amt', 'per month')}</span><span data-show="pct">${
-      inp('pct', 'amt pct', 'percent of left-over', 5)}%</span></span></div>
+      data-key="${k}" data-mode="pct">% left</button><button type="button" data-key="${k}"
+      data-mode="rest" title="An even share of whatever is left after everything else">rest</button></span><span
+      data-show="fixed">${inp('amt', 'amt', 'per month')}</span><span data-show="pct">${
+      inp('pct', 'amt pct', 'percent of left-over', 5)}%</span><span data-show="rest"
+      class="num" data-rest="${k}"></span></span></div>
     <div class="pctrow" data-show="pct">min ${inp('min', 'amt', 'at least per month')} max ${
       inp('max', 'amt', 'at most per month')} <span class="num" data-out="${k}"></span></div>
     <span class="small muted" data-note="${k}"></span></div>`;
-}
-
-/** A cost category toggle with any credits nested under it. */
-function costToggle(i: number): string {
-  const d = app.d;
-  const cat = d.cats[i];
-  const total = sum(d.byCat[i]);
-  const label = cat.label || `Include ${cat.name.toLowerCase()}`;
-  let h = `<label class="toggle"><input type="checkbox" data-tg="${esc(cat.name)}"><span>${
-      esc(label)} <span class="num">${fmt(d.avg(i))}</span>/mo <span class="small muted">(${
-      fmt(total)} over ${d.n} months${cat.note ? `; ${esc(cat.note)}` : ''})</span></span></label>`;
-  d.offsetsOf(cat.name).forEach((c) => {
-    const cc = d.cats[c];
-    h += `<label class="toggle" style="padding-left:24px"><input type="checkbox"
-      data-tg="${esc(cc.name)}" data-parent="${esc(cat.name)}"><span>${
-        esc(cc.label || `Subtract ${cc.name.toLowerCase()}`)} <span class="num">${
-        fmt(d.credAvg(c))}</span>/mo <span class="small muted">(${fmt(-sum(d.byCat[c]))}${
-        cc.note ? `; ${esc(cc.note)}` : ''}). Net: <span class="num" id="ot-net-${i}"></span>/mo
-      </span></span></label>`;
-  });
-  return h;
 }
 
 /** Contribution modes, computed amounts, fund balances and the emergency note. */
@@ -321,6 +380,7 @@ function updateSavings(): void {
       x.hidden = x.dataset.show !== line.mode;
     });
     el.querySelector<HTMLElement>('[data-out]')!.textContent = `= ${fmt(b.amt[key] ?? 0)}/mo`;
+    el.querySelector<HTMLElement>('[data-rest]')!.textContent = `${fmt(b.amt[key] ?? 0)}/mo`;
     const note: string[] = [];
     const sv = d.p.savings.find((x) => `sav:${x.id}` === key);
     if (sv) {
@@ -336,43 +396,14 @@ function updateSavings(): void {
     }
     el.querySelector<HTMLElement>('[data-note]')!.textContent = note.join(' · ');
   });
-  if (d.emergency.length) {
-    const names = d.funds.map((f) => f.name);
-    $('em-note').textContent = names.length ?
-        `${fmt(b.emergency)}/mo is paid from ${names.join(' and ')}, not the monthly budget. ` +
-        'Whatever the fund can\'t cover comes out of that month (see Spending over time).' :
-        'No emergency fund in Settings › Savings & income, so these count as monthly spending.';
-  }
-}
-
-/** The five figures at the top. */
-function updateStrip(): void {
-  const {d, S} = app;
-  const st = S.st;
-  const b = budget(d, st);
-  $('s-inc').textContent = fmt(b.income);
-  $('s-inc-note').textContent = `${d.partners.map((x) => x.name).join(' + ') || 'Household'}, net`;
-  $('s-sp').textContent = fmt(b.spend);
-  const extras = [...d.annual, ...d.oneTime].filter((i) => !d.cats[i].tax && st.on[d.cats[i].name])
-      .map((i) => `incl. ${d.cats[i].name.toLowerCase()}`);
-  $('s-sp-note').textContent = [b.credits ? 'after credits' : 'regular categories', ...extras]
-      .join(' · ');
-  $('s-sv').textContent = fmt(b.savings + b.investing);
-  const parts = [];
-  if (d.children.length) parts.push('529s');
-  d.p.savings.forEach((s) => parts.push(s.name));
-  if (b.investing) parts.push('investing');
-  $('s-sv-note').textContent = parts.join(' + ') || 'none set';
-  const taxCats = [...d.annual, ...d.oneTime].filter((i) => d.cats[i].tax && st.on[d.cats[i].name]);
-  $('s-tx').textContent = taxCats.length ? fmt(b.tax) : 'off';
-  const nested = taxCats.flatMap((i) => d.offsetsOf(d.cats[i].name))
-      .filter((c) => st.on[d.cats[c].name]);
-  $('s-tx-note').textContent = (taxCats.length ?
-      taxCats.map((i) => d.cats[i].name.toLowerCase()).join(' + ') : 'none set aside') +
-      (nested.length ? `, after ${nested.map((c) => d.cats[c].name.toLowerCase()).join(', ')}` :
-          '');
-  const L = $('s-left');
-  L.textContent = fmt(b.left);
-  L.className = `v ${b.left < 0 ? 'neg' : 'pos'}`;
-  $('s-left-yr').textContent = `${b.left < 0 ? 'short ' : ''}${fmt(Math.abs(b.left) * 12)} over a year`;
+  const fundIn = sum(d.funds.map((f) => b.amt[`sav:${f.id}`] ?? 0));
+  $in('em-amt').placeholder = String(Math.round(fundIn));
+  const names = d.funds.map((f) => f.name).join(' and ');
+  const change = fundIn - b.emergency;
+  $('em-note').textContent = d.funds.length ?
+      `Paid from ${names}, not the monthly budget. ${fmt(fundIn)}/mo goes in, so it ${
+        Math.abs(change) < 0.5 ? 'holds steady' : change > 0 ?
+            `grows ${fmt(change)}/mo` : `shrinks ${fmt(-change)}/mo`}. Empty = the same as ` +
+          'what goes in. Whatever the fund can\'t cover comes out of that month.' :
+      'No emergency fund in Settings › Savings & income, so this counts as monthly spending.';
 }
