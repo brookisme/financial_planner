@@ -123,7 +123,18 @@ button.btn.primary,a.btn.primary{background:var(--ink);color:var(--bg);border-co
 .ln{width:22px;height:0;border-top:2px dashed var(--avg);display:inline-block}
 .ln.save{border-top:3px dotted var(--save)}
 .detail{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px}
-hr.divider{border:0;border-top:1px solid var(--rule);margin:6px 0}
+.stack{display:grid;gap:18px;align-content:start;min-width:0}
+.fold-all{display:flex;justify-content:flex-end}
+.panel.foldable{position:relative}
+.panel.foldable>.fold{position:absolute;top:8px;right:8px;font:inherit;font-size:14px;line-height:1;width:28px;height:28px;border:1px solid var(--rule);border-radius:6px;background:var(--bg);color:var(--ink2);cursor:pointer}
+.panel.foldable>.fold:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.panel.foldable>:nth-child(2){padding-right:34px}
+.panel.folded>:not(.fold):not(:nth-child(2)){display:none}
+.r-totals{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--rule);border-radius:10px;overflow:hidden}
+.r-totals>div{display:grid;gap:2px;padding:10px 14px;min-width:0}
+.r-totals>div+div{border-left:1px solid var(--rule);background:var(--accent-soft)}
+.r-totals .v{font-size:22px}
+@media (max-width:520px){.r-totals{grid-template-columns:1fr}.r-totals>div+div{border-left:0;border-top:1px solid var(--rule)}}
 .part-break{border-top:2px solid var(--ink);margin:12px 0 0}
 .ptable.act tr.sel td{background:var(--accent-soft)}
 .ptable tr.off td{color:var(--ink3)}
