@@ -3,14 +3,18 @@
  * data, a typical year (each calendar month's average with the lowest and highest year), a
  * 12-month year you can drag back in time, or a range drawn across the months. Clicking a month
  * shows its days. The category table (average, min, max), the transactions (with an opt-in
- * Recategorize mode) and top merchants all follow the period shown.
+ * Recategorize mode) and top merchants all follow the period shown. A budget (or the 12-month
+ * average) can be attached: the chart then shows the budgeted line and how far over or under it
+ * the period shown was, and the table gets a "vs budget" column.
  *
  * License: BSD 3-Clause
  */
 
 import {$, $in, app, hideTip, showTip} from '../app';
 import {esc, fk, fmt, niceStep, sum} from '../format';
-import type {Tx} from '../types';
+import {annualMo} from '../model';
+import type {PlannerState, Tx} from '../types';
+import {budgetChoices, budgetSt, stripView} from './budgets';
 import {openRuleDialog} from './categorize';
 
 //
@@ -83,6 +87,13 @@ export function buildSpending(): void {
     if (tr) openRuleDialog(tr.dataset.id!);
   });
   wirePointer();
+  $('attach').addEventListener('change', () => {
+    const v = stripView();
+    v.attach = ($('attach') as HTMLSelectElement).value || null;
+    v.save();
+    refresh();
+  });
+  fillAttach();
   view = MON.length > 12 ? 'year' : 'all';
   setMode('spend');
 }
@@ -94,6 +105,13 @@ export function selectCat(c: number|null): void {
     markMode();
   }
   selCat = c;
+  refresh();
+}
+
+/** Rebuilds the attach choices and redraws (after budgets are saved, updated or deleted). */
+export function refreshSpending(): void {
+  if (!MON.length) return;
+  fillAttach();
   refresh();
 }
 
@@ -161,6 +179,43 @@ function selection(): number[] {
   if (view === 'year') return span(Math.max(0, yearEnd - 11), yearEnd);
   if (view === 'range' && range) return span(range[0], range[1]);
   return span(0, MON.length - 1);
+}
+
+/** The attach choices: no budget, the 12-month average, then each saved budget. */
+function fillAttach(): void {
+  const sel = $('attach') as HTMLSelectElement;
+  const v = stripView();
+  if (v.attach && !budgetSt(v.attach)) v.attach = null;
+  sel.innerHTML = '<option value="">Attach a budget…</option>' + budgetChoices().map(([id, n]) =>
+      `<option value="${esc(id)}">${esc(n)}</option>`).join('');
+  sel.value = v.attach ?? '';
+}
+
+/** The attached budget's settings, if any. */
+function attached(): PlannerState|null {
+  return budgetSt(stripView().attach);
+}
+
+/** A category's budget per month (credits as positive), or null if the budget has no line for it. */
+function planned(st: PlannerState, c: number): number|null {
+  const d = app.d;
+  const kind = d.cats[c].kind;
+  if (kind === 'spending' || (kind === 'credit' && d.isPlannerCredit(c))) {
+    return st.plan[d.cats[c].name] ?? 0;
+  }
+  return null;
+}
+
+/** A "vs budget" cell: % over (red) or under (green); for money in, more is green. */
+function vsCell(actual: number, plan: number|null, moneyIn = false): string {
+  if (plan === null) return '<td></td>';
+  if (Math.abs(plan) < 0.5) {
+    return `<td class="num muted"${Math.abs(actual) < 0.5 ? '' : ' title="Nothing budgeted"'}>–</td>`;
+  }
+  const pct = Math.round((actual - plan) / plan * 100);
+  if (!pct) return '<td class="num muted" title="On budget">0%</td>';
+  const good = moneyIn ? pct > 0 : pct < 0;
+  return `<td class="num ${good ? 'pos' : 'neg'}">${pct > 0 ? '+' : '−'}${Math.abs(pct)}%</td>`;
 }
 
 /** Redraws everything that follows the period. */
@@ -250,14 +305,22 @@ function buildTable(): void {
       type="checkbox" data-on="${esc(cat.name)}"${on[cat.name] ? ' checked' : ''}>${
       isCredit(c) ? '− ' : ''}${link}</label>` : link}</td>`;
   };
+  const st = attached();
+  const ncol = st ? 5 : 4;
+  const vs = (actual: number[], plan: number|null, moneyIn = false) =>
+      st ? vsCell(sum(actual) / n, plan, moneyIn) : '';
   const row = (c: number, pad = 0, toggle = false, pick = true) => {
     const off = toggle && !on[d.cats[c].name];
     return `<tr class="${[isCredit(c) ? 'credit' : '', off ? 'off' : '', selCat === c ? 'sel' : '']
-        .join(' ').trim()}">${nameCell(c, pad, toggle, pick)}${cells(signed(c), isCredit(c))}</tr>`;
+        .join(' ').trim()}">${nameCell(c, pad, toggle, pick)}${cells(signed(c), isCredit(c))}${
+        vs(signed(c), st && planned(st, c), isCredit(c))}</tr>`;
   };
-  const totalRow = (lbl: string, series: number[], pick = false) => `<tr class="total${
+  const totalRow = (lbl: string, series: number[], pick = false, plan: number|null = null,
+                    moneyIn = false) => `<tr class="total${
       pick && selCat === null ? ' sel' : ''}"><td>${pick ? `<button class="cat-link" type="button"
-      data-pick="">${esc(lbl)}</button>` : esc(lbl)}</td>${cells(series)}</tr>`;
+      data-pick="">${esc(lbl)}</button>` : esc(lbl)}</td>${cells(series)}${
+      vs(series, plan, moneyIn)}</tr>`;
+  const planSum = (list: number[]) => st ? sum(list.map((c) => planned(st, c) ?? 0)) : null;
   const series = (list: number[]) => months.map((m) => sum(list.map((c) =>
       (isCredit(c) ? -1 : 1) * (A[c][m] ?? 0))));
   const groups: string[] = [];
@@ -270,7 +333,7 @@ function buildTable(): void {
   const credCount: number[] = [];
   if (mode !== 'cred') {
     groups.forEach((g) => {
-      h += `<tr class="group"><td colspan="4">${esc(g)}</td></tr>`;
+      h += `<tr class="group"><td colspan="${ncol}">${esc(g)}</td></tr>`;
       d.regular.filter((i) => d.cats[i].group === g).sort((a, b) => d.avg(b) - d.avg(a))
           .forEach((i) => {
             h += row(i);
@@ -283,9 +346,9 @@ function buildTable(): void {
             }
           });
     });
-    h += totalRow('Regular spending', series(d.regular));
+    h += totalRow('Regular spending', series(d.regular), false, planSum(d.regular));
     if (d.costs.length) {
-      h += '<tr class="group"><td colspan="4">Annual, 1-time &amp; emergency</td></tr>';
+      h += `<tr class="group"><td colspan="${ncol}">Annual, 1-time &amp; emergency</td></tr>`;
       d.costs.forEach((i) => {
         h += row(i, 0, true);
         if (on[d.cats[i].name]) counted.push(i);
@@ -298,7 +361,7 @@ function buildTable(): void {
       });
     }
     if (savCats.length) {
-      h += '<tr class="group"><td colspan="4">Savings &amp; transfers</td></tr>';
+      h += `<tr class="group"><td colspan="${ncol}">Savings &amp; transfers</td></tr>`;
       savCats.forEach((i) => {
         h += row(i, 0, true, false);
         if (on[d.cats[i].name]) counted.push(i);
@@ -308,21 +371,34 @@ function buildTable(): void {
   if (mode !== 'spend') {
     const loose = mode === 'cred' ? d.credits : d.credits.filter((c) => !d.cats[c].offsets);
     if (loose.length) {
-      h += `<tr class="group"><td colspan="4">${mode === 'cred' ? 'Credits' : 'Other credits'}</td></tr>`;
+      h += `<tr class="group"><td colspan="${ncol}">${mode === 'cred' ? 'Credits' :
+          'Other credits'}</td></tr>`;
       loose.forEach((c) => h += row(c, 0, true));
       credCount.push(...loose.filter((c) => on[d.cats[c].name]));
     }
   }
   if (mode === 'cred') {
-    h += totalRow('All credits', series(credCount), true);
+    h += totalRow('All credits', series(credCount), true, planSum(credCount), true);
   } else {
     const spent = series(counted);
     const cred = series(credCount);
+    // vs budget compares like for like: regular + annual costs (no 1-time, emergency or savings)
+    // minus the credits a budget plans for
+    const planCred = credCount.filter((c) => d.isPlannerCredit(c));
+    const plan = st ? (planSum(d.regular) ?? 0) + annualMo(st) - (planSum(planCred) ?? 0) : null;
+    const like = series(counted.filter((c) => ['spending', 'annual'].includes(d.cats[c].kind)));
+    const likeCred = series(planCred);
     h += totalRow(mode === 'both' ? 'Net (ticked)' : 'Total (ticked)',
                   spent.map((v, i) => v - cred[i]), true);
+    if (st) {
+      h += `<tr class="vsrow"><td class="small muted" colspan="4">vs budget: regular + annual
+        costs${mode === 'both' ? ', after ticked credits' : ''} (budgets have no 1-time or
+        emergency lines)</td>${vsCell(sum(like.map((v, i) => v - likeCred[i])) / n, plan)}</tr>`;
+    }
   }
   $('actbody').innerHTML = h;
   $('act-avg-head').textContent = 'Avg / mo';
+  $('act-vs-head').hidden = !st;
   $('act-note').textContent = `${selectionLabel()}. ${mode === 'cred' ?
       'Money in, as positive amounts.' : 'Ticked rows count in the total.'}`;
 }
@@ -425,7 +501,14 @@ function drawChart(): void {
   }
   const avg = cols.length ? sum(cols.map((c) => colValue(c, avgOf))) / cols.length : 0;
   const avgName = selCat === null && mode !== 'cred' ? 'Avg regular' : 'Avg';
+  const st = attached();
+  const monthly = !st ? null : selCat !== null ? planned(st, selCat) : mode === 'cred' ?
+      sum(credCats.map((c) => planned(st, c) ?? 0)) :
+      sum(d.regular.map((c) => planned(st, c) ?? 0)) + annualMo(st);
+  const days = dayMonth !== null ? cols.length : 1;
+  const bud = monthly === null ? null : monthly / days;
   leg += `<span><i class="ln"></i>${avgName} ${fmt(avg)}/${unit}</span>` +
+      (bud === null ? '' : `<span><i class="ln bud"></i>Budget ${fmt(bud)}/${unit}</span>`) +
       (view === 'typical' && dayMonth === null ? '<span>│ lowest – highest year</span>' : '');
   title += dayMonth !== null ? ` by day, ${LBL[dayMonth]}` :
       view === 'typical' ? ', typical year' : ' by month';
@@ -435,7 +518,24 @@ function drawChart(): void {
   const spreads = cols.map((c) => dayMonth === null ? colSpread(c, upCats) : null);
   const upT = cols.map((c) => sum(up.map((s) => Math.max(colValue(c, s.cats), 0))));
   const dnT = cols.map((c) => sum(down.map((s) => Math.max(colValue(c, s.cats), 0))));
-  const maxU = Math.max(...upT, ...spreads.map((s) => s ? s[1] : 0), avg, 1);
+  const maxU = Math.max(...upT, ...spreads.map((s) => s ? s[1] : 0), avg, bud ?? 0, 1);
+  const moneyIn = selCat !== null ? isCredit(selCat) : mode === 'cred';
+  // Like for like: budgets have no 1-time purchases, and emergency costs come from the fund.
+  const vsCats = selCat === null && mode !== 'cred' ? [...d.regular, ...d.annual] : upCats;
+  const vsT = cols.map((c) => colValue(c, vsCats));
+  const actualMo = dayMonth !== null ? sum(vsT) : cols.length ? sum(vsT) / cols.length : 0;
+  const vsEl = $('attach-vs');
+  if (monthly === null || Math.abs(monthly) < 0.5) {
+    vsEl.textContent = st ? 'Nothing budgeted for this' : '';
+    vsEl.className = 'attach-vs';
+  } else {
+    const diff = actualMo - monthly;
+    const pct = Math.round(Math.abs(diff) / monthly * 100);
+    const over = diff > 0;
+    vsEl.textContent = Math.abs(diff) < 0.5 ? 'On budget' : `${fmt(Math.abs(diff))}/mo ${
+        over ? 'over' : 'under'} budget (${pct}%)${dayMonth !== null ? ` in ${LBL[dayMonth]}` : ''}`;
+    vsEl.className = `attach-vs ${Math.abs(diff) < 0.5 ? '' : over !== moneyIn ? 'over' : 'under'}`;
+  }
   const maxD = Math.max(...dnT, 0);
   const step = niceStep(maxU + maxD);
   const topU = Math.ceil(maxU / step) * step;
@@ -494,6 +594,9 @@ function drawChart(): void {
     g += `<g class="m" data-k="${k}" data-tip="${tip.replace(/"/g, '&quot;')}">${bars}<rect class="hit" x="${
         L + k * bw}" y="${T}" width="${bw}" height="${ph}"/>${lab}</g>`;
   });
+  if (bud !== null) {
+    g += `<line class="budline" x1="${L}" x2="${W - R}" y1="${y(bud)}" y2="${y(bud)}"/>`;
+  }
   g += `<line class="avgline" x1="${L}" x2="${W - R}" y1="${y(avg)}" y2="${y(avg)}"/>` +
       `<rect id="brush" class="brush" x="0" y="${T}" width="0" height="${ph}" visibility="hidden"/>`;
   svg.innerHTML = g;
