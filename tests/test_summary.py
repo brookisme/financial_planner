@@ -40,6 +40,9 @@ def test_last_month_fixes_the_window(plan_dir: Path) -> None:
     assert data.months == ['2025-01'] and data.today == '2025-02'
     payload = build_payload(plan_dir)
     assert all(row[0].startswith('2025-01') for row in payload['tx'])
+    assert payload['all_months'] == ['2025-01', '2025-02']
+    assert all(row[0].startswith('2025-02') for row in payload['other_tx'])
+    assert len(payload['all_by_cat'][0]) == 2
 
 
 def test_ignored_categories_stay_out_of_window_and_payload(plan_dir: Path) -> None:
