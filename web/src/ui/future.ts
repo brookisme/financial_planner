@@ -7,7 +7,7 @@
 
 import {$, $in, app, changed, hideTip, num, onChange, showTip} from '../app';
 import {esc, fk, fmt, niceStep} from '../format';
-import {clone, deflator, incomeAt, PROJECTION_YEARS, retireYear, retirementIncome,
+import {clone, deflator, incomeAt, PROJECTION_YEARS, retireYear, retirementIncome, simulate,
         spendAt} from '../model';
 
 //
@@ -60,8 +60,8 @@ export function buildFuture(): void {
       d.timelines[k].graduation}`);
   $('f-built').textContent = `${grads.length ? `${grads.join('; ')}. Each 529 contribution stops ` +
       'at that graduation. ' : ''}Savings marked to stop at retirement, investment ` +
-      'contributions, and credits and one-time costs not marked "in retirement" stop at ' +
-      'retirement. Income before retirement is today\'s take-home, kept up with inflation plus ' +
+      'contributions, and credits and costs not marked "in retirement" stop at retirement. ' +
+      'Contributions set as "% left" follow each year\'s left-over. Income before retirement is today\'s take-home, kept up with inflation plus ' +
       'any yearly raise set in Retirement assumptions.';
   onChange(drawFuture);
   fillFuture();
@@ -149,6 +149,8 @@ function drawFuture(): void {
         r.s.ret ? ' · retired' : ''}<br>Living ${fmt(r.s.living * k)}` +
         (r.s.tax ? `<br>Taxes set aside ${fmt(r.s.tax * k)}` : '') +
         (r.s.health ? `<br>Health insurance ${fmt(r.s.health * k)}` : '') +
+        (r.s.emergency ? `<br>Emergency costs ${fmt(r.s.emergency * k)} (from the fund)` : '') +
+        (r.s.short ? `<br>Emergency costs the fund can't cover ${fmt(r.s.short * k)}` : '') +
         (r.sav ? `<br>Savings ${fmt(r.sav)}` : '') + `<br>Income ${fmt(r.inc)}<br><b>${
         left >= 0 ? 'Left over' : 'Short'} ${fmt(Math.abs(left))}/mo</b>`;
     g += `<g class="m" data-tip="${tip.replace(/"/g, '&quot;')}"><rect x="${bx}" y="${
@@ -195,4 +197,41 @@ function drawFuture(): void {
         fmt(out)}</td><td>${fmt(inc)}</td><td class="${df >= 0 ? 'pos' : 'neg'}">${
         df >= 0 ? '+' : ''}${fmt(df)}</td></tr>`;
   }).join('');
+  drawBalances(stages);
+}
+
+/** Balances of every 529, savings account and investment at the start of each stage. */
+function drawBalances(stages: Array<[number, string]>): void {
+  const {d, S} = app;
+  const sim = simulate(d, S);
+  const names: Array<[string, string]> = [
+    ...d.children.map((c) => [`529:${c.id}`, `529, ${c.name}`] as [string, string]),
+    ...d.p.savings.map((s) => [`sav:${s.id}`, s.name] as [string, string]),
+    ...d.p.investments.map((v) => [`inv:${v.id}`, v.name] as [string, string]),
+  ];
+  $('f-bal-panel').hidden = !names.length;
+  if (!names.length) return;
+  const real = (y: number) => S.fs.nominal ? 1 : Math.pow(1 + S.rs.inf / 100, y - d.todayYear);
+  const balAt = (key: string, y: number) => (sim.years.get(y - 1)?.bal[key] ?? 0) / real(y);
+  const start: Record<string, number> = {};
+  d.children.forEach((c) => start[`529:${c.id}`] = c.college_529.balance);
+  d.p.savings.forEach((s) => start[`sav:${s.id}`] = s.balance);
+  d.p.investments.forEach((v) => start[`inv:${v.id}`] = S.rs.inv[v.id]?.bal ?? v.balance);
+  const capped = d.p.savings.filter((s) => s.max_balance != null);
+  $('f-bal').innerHTML = `<tr><th>Account</th>${stages.map(([yr, lbl]) =>
+      `<th>${esc(lbl)} ${yr}</th>`).join('')}${capped.length ? '<th>Reaches max</th>' : ''}</tr>` +
+      names.map(([key, name]) => {
+        const sv = capped.find((s) => `sav:${s.id}` === key);
+        const full = sv ? sim.full[key] : undefined;
+        const kid = d.children.findIndex((c) => `529:${c.id}` === key);
+        const spent = (yr: number) => kid >= 0 && yr > Math.floor(d.gradT(kid)) + 1;
+        return `<tr><td>${esc(name)}</td>${stages.map(([yr]) => `<td>${spent(yr) ? '–' :
+            fmt(yr <= d.todayYear ? start[key] : balAt(key, yr))}</td>`).join('')}${
+            capped.length ? `<td>${sv ? (full == null ? 'not at this rate' :
+                `${full} (${fmt(sv.max_balance!)})`) : ''}</td>` : ''}</tr>`;
+      }).join('');
+  $('f-bal-note').textContent = `Balance at the start of each stage${S.fs.nominal ? '' :
+      ', in today\'s dollars'}. 529s show until college starts; ` +
+      'savings past their max go to their overflow investment; emergency costs come out of ' +
+      'emergency funds first.';
 }
