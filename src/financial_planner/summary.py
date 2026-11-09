@@ -39,6 +39,8 @@ class PlanData:
         assignments: One category assignment per transaction.
         categories: Categories in use (config order, then any referenced but undefined).
         months: The YYYY-MM months in the averaging window.
+        all_months: Every month from the oldest counted transaction to the end of the window (or
+            the newest transaction, if later).
         today: The plan's "now" (YYYY-MM).
         warnings: Problems worth showing (missing files, skipped rows).
     """
@@ -49,6 +51,7 @@ class PlanData:
     months: list[str]
     today: str
     warnings: list[str] = field(default_factory=list)
+    all_months: list[str] = field(default_factory=list)
 
     @property
     def config(self) -> Config:
@@ -77,8 +80,11 @@ def load_plan(plan_dir: Path) -> PlanData:
     counted = [t for t, a in zip(txs, assignments) if kinds[a.category] != 'ignore']
     months = month_window(counted, cfg.plan.months, cfg.plan.last_month)
     today = cfg.plan.today or (next_month(months[-1]) if counted else today_month())
+    seen = [t.month for t in counted]
+    all_months = month_range(min([months[0], *seen]), max([months[-1], *seen]))
     return PlanData(loaded=loaded, transactions=txs, assignments=assignments,
-                    categories=categories, months=months, today=today, warnings=warnings)
+                    categories=categories, months=months, today=today, warnings=warnings,
+                    all_months=all_months)
 
 
 def categories_in_use(cfg: Config, assignments: list[Assignment]) -> list[Category]:
@@ -126,18 +132,20 @@ def month_window(transactions: list[Transaction], months: int,
     return month_range(first, last)
 
 
-def by_category(data: PlanData) -> list[list[float]]:
+def by_category(data: PlanData, months: Optional[list[str]] = None) -> list[list[float]]:
     """Per-category monthly totals over the window (money out positive).
 
     Args:
         data: Plan data.
+        months: Months to total (default: the averaging window).
 
     Returns:
         A matrix aligned with ``data.categories`` x ``data.months``.
     """
     index = {c.name: i for i, c in enumerate(data.categories)}
-    col = {m: i for i, m in enumerate(data.months)}
-    out = [[0.0] * len(data.months) for _ in data.categories]
+    months = data.months if months is None else months
+    col = {m: i for i, m in enumerate(months)}
+    out = [[0.0] * len(months) for _ in data.categories]
     for tx, a in zip(data.transactions, data.assignments):
         if tx.month in col:
             out[index[a.category]][col[tx.month]] += tx.amount
@@ -186,11 +194,14 @@ def build_payload(plan_dir: Path) -> dict[str, Any]:
     col = {m: i for i, m in enumerate(data.months)}
     cat_index = {c.name: i for i, c in enumerate(data.categories)}
     source_names = [s.name for s in cfg.sources]
-    tx = []
+    tx: list[list[Any]] = []
+    other_tx: list[list[Any]] = []
     for t, a in zip(data.transactions, data.assignments):
-        if t.month in col and data.categories[cat_index[a.category]].kind != 'ignore':
-            tx.append([t.date, t.description, round(t.amount, 2), cat_index[a.category],
-                       source_names.index(t.source) if t.source in source_names else -1, t.id])
+        if data.categories[cat_index[a.category]].kind == 'ignore':
+            continue
+        row = [t.date, t.description, round(t.amount, 2), cat_index[a.category],
+               source_names.index(t.source) if t.source in source_names else -1, t.id]
+        (tx if t.month in col else other_tx).append(row)
     college = cfg.assumptions.college
     return {
         'error': None,
@@ -201,6 +212,10 @@ def build_payload(plan_dir: Path) -> dict[str, Any]:
         'categories': [c.model_dump() for c in data.categories],
         'by_cat': by_category(data),
         'tx': tx,
+        'all_months': data.all_months,
+        'all_month_labels': [month_label(m) for m in data.all_months],
+        'all_by_cat': by_category(data, data.all_months),
+        'other_tx': other_tx,
         'sources': source_names,
         'household': cfg.household.model_dump(),
         'children': [child_timeline(c, data.today, college.graduation_age, college.years)
