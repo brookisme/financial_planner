@@ -8,22 +8,20 @@
 // CONSTANTS
 //
 const TOPICS: Array<[string, string]> = [['h-start', 'Quick start'], ['h-setup', 'Setting up'],
-  ['h-scen', 'Scenarios & sharing'], ['h-planner', 'Monthly planner'],
-  ['h-explore', 'Explore spending'], ['h-cat', 'Categorizing'], ['h-college', 'College 529s'],
+  ['h-explore', 'Spending'], ['h-planner', 'Budgeting'], ['h-scen', 'Sharing'], ['h-cat', 'Categorizing'], ['h-college', 'College 529s'],
   ['h-retire', 'Retirement'], ['h-future', 'Spending over time'], ['h-privacy', 'Privacy'],
   ['h-faq', 'Questions']];
 const BODY = `
 <h3 id="h-start">Quick start</h3>
 <ol>
-  <li><b>Read the strip at the top.</b> It's one month on paper: take-home income, minus spending,
-    savings and taxes, equals what's left over.</li>
-  <li><b>Try a change in the Monthly planner.</b> Every category starts at its average. Type a new
-    number and the strip updates. Changed boxes turn blue.</li>
-  <li><b>Save it as a scenario.</b> Name it in the Scenarios bar and click <i>Save as new</i>. Make
-    another and use <i>Compare</i>.</li>
+  <li><b>Look at your spending.</b> <i>Spending</i> shows what your transactions say: each
+    category's monthly average, lowest and highest month, and every transaction behind it.</li>
+  <li><b>Make a budget.</b> In <i>Budgeting</i> every category starts at its average. Type a new
+    number and the strip at the top updates. Changed boxes turn blue.</li>
+  <li><b>Save it.</b> Name it in the Budgets bar and click <i>Save as new</i>. Pick any saved
+    budget (or the average) in the Compare column to see the difference line by line.</li>
   <li><b>Look at the long view.</b> <i>Retirement</i> shows income at each retirement age.
     <i>Spending over time</i> shows how costs change as children leave home.</li>
-  <li><b>Dig in.</b> <i>Explore spending</i> shows every transaction behind a category.</li>
 </ol>
 <p class="note">Your changes are saved in the plan folder on this computer. Nothing is sent
   anywhere.</p>
@@ -49,48 +47,47 @@ const BODY = `
   folder (or upload them under Data sources). New exports with the same layout are picked up
   automatically if the source's file pattern matches them.</p>
 
-<h3 id="h-scen">Scenarios &amp; sharing</h3>
-<p>A scenario is a named snapshot of all settings: the planner, the 529 cards, Retirement and
-  Spending over time.</p>
-<table class="help-table">
-  <tr><td>Save as new</td><td>Saves the current settings under the name you typed.</td></tr>
-  <tr><td>Tabs</td><td>Click one to load it. A <b>•</b> means it has unsaved changes.</td></tr>
-  <tr><td>Update / Delete</td><td>Save changes into, or remove, the scenario that's showing.</td></tr>
-  <tr><td>Compare</td><td>One card each for the monthly budget, the 529s and retirement: what
-    changed and its effect, green if better, red if worse. <i>Details</i> shows everything.</td></tr>
-  <tr><td>Reset everything</td><td>Back to the starting values from the config. Saved scenarios
-    are kept.</td></tr>
-  <tr><td>Share</td><td>Copy a share code (or save a file) and send it; the other person pastes it
-    under <i>Receive</i>. A scenario sent back after edits updates the original.</td></tr>
-</table>
-<p class="note">Share codes contain your planner amounts and retirement inputs (not
-  transactions). Anyone with a code can read those numbers.</p>
-<p>To give someone <b>everything</b> (settings, data, scenarios), use Settings › <i>Share plan</i>
+<h3 id="h-scen">Sharing</h3>
+<p>To give someone <b>everything</b> (settings, data, budgets), use Settings › <i>Share plan</i>
   › <i>Save plan as a file</i>. They open it from the Mac app's menu-bar icon › <i>Open Plan
   File…</i>. That file contains your real transactions: share it privately.</p>
 
-<h3 id="h-planner">Monthly planner</h3>
+<h3 id="h-explore">Spending</h3>
 <ul>
-  <li><b>Categories</b> start at their average, with the lowest and highest months beside them.</li>
-  <li><b>Credits</b> (reimbursements, refunds) can sit under the category they offset, or below
-    the total. Tick them to subtract them.</li>
-  <li><b>Savings</b>: each 529, savings account, emergency fund and investment adds either a
-    fixed <b>$/mo</b> or <b>% left</b>: a share of what is left each month after spending, taxes
-    and the fixed amounts, kept between an optional min and max. A savings account with a max
-    balance sends the rest to an investment once it's full; the note under it says when.</li>
-  <li><b>Annual expenses</b> (taxes, insurance), <b>1-time purchases</b> and <b>emergency fund
-    costs</b> are kept out of the averages. Tick one to count it. Emergency fund costs are paid
-    from the emergency fund instead of the monthly budget; only what the fund can't cover comes
-    out of the month.</li>
-  <li><i>Try 10% less on flexible spending</i> trims the categories marked flexible.</li>
-</ul>
-
-<h3 id="h-explore">Explore spending</h3>
-<ul>
-  <li><b>Spending / Credits / Both</b> chooses what you're looking at.</li>
-  <li>Click a category chip to focus on it, or a month to filter the transactions.</li>
+  <li>The chart shows each month. Click a month to filter the transactions.</li>
+  <li><b>Spending / Credits / Both</b> chooses the rows in the table. Each row shows the monthly
+    average, the lowest and the highest month. Click a category to see it in the chart.</li>
+  <li><b>Credits</b> sit under the category they offset (in <i>Both</i>), or in their own list.
+    Annual, 1-time and emergency costs, and savings transfers, have a tick box: ticked rows count
+    in the total.</li>
   <li><b>Recategorize</b> (above the transactions) turns on editing: click a transaction to change
     its category or make a rule from it. It's off by default so nothing changes by accident.</li>
+</ul>
+
+<h3 id="h-planner">Budgeting</h3>
+<table class="help-table">
+  <tr><td>Budgets bar</td><td>Save the current budget under a name, click one to load it (a
+    <b>•</b> means unsaved changes), update or delete it, or start from the averages again. A
+    budget holds only Budgeting: categories, income, savings, annual expenses and emergency costs.
+    529 cards and Retirement are not part of it.</td></tr>
+  <tr><td>Planned / mo</td><td>Your budget. Starts at each category's average.</td></tr>
+  <tr><td>Compare</td><td>Pick the average or any saved budget; <i>Difference</i> is planned
+    minus compare (green is better).</td></tr>
+  <tr><td>Below the table</td><td>Net spending, annual expenses, emergency fund costs, each savings
+    line and the monthly total of spending plus savings.</td></tr>
+</table>
+<ul>
+  <li><b>Savings</b>: each 529, savings account, emergency fund and investment adds a fixed
+    <b>$/mo</b>, <b>% left</b> (a share of what is left after spending, annual expenses and the
+    fixed amounts, kept between an optional min and max) or <b>rest</b> (whatever is still left,
+    split evenly between every "rest" line). A savings account with a max balance sends the rest
+    to an investment once it's full; the note under it says when.</li>
+  <li><b>Annual expenses</b>: add as many as you like (+ Add, a name and a yearly amount; × to
+    remove). Their total ÷ 12 counts each month.</li>
+  <li><b>Emergency fund costs</b>: what you expect to take out of the emergency fund each month.
+    Empty means the same as what goes in, so the fund holds steady; more makes it shrink, less
+    makes it grow. With no emergency fund it counts as spending.</li>
+  <li><i>Try 10% less on flexible spending</i> trims the categories marked flexible.</li>
 </ul>
 
 <h3 id="h-cat">Categorizing</h3>
@@ -158,7 +155,7 @@ const BODY = `
 export function buildHelp(): void {
   const root = document.getElementById('help')!;
   root.innerHTML = `<div class="sec-head"><h2 id="help-title">Help</h2><a class="btn"
-      href="#planner" style="text-decoration:none">Back to the budget</a></div>
+      href="#budget" style="text-decoration:none">Back to the budget</a></div>
     <nav class="help-toc panel" aria-label="Help topics"><span class="eyebrow">Topics</span>
       <div class="chips">${TOPICS.map(([id, l]) => `<button class="chip" type="button"
         data-go="${id}">${l}</button>`).join('')}</div></nav>
