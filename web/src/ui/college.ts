@@ -1,5 +1,6 @@
 /**
- * @fileoverview College 529 cards: one per child, with school type, cost, presets and sliders.
+ * @fileoverview College 529 cards: one per child, with school type, cost, editable presets and
+ * sliders. The 529's balance and monthly contribution come from Budgeting › Savings.
  *
  * License: BSD 3-Clause
  */
@@ -7,7 +8,7 @@
 import {$, $in, app, changed, num, onChange} from '../app';
 import {esc, fmt} from '../format';
 import {budget, kidCalc} from '../model';
-import {fillPlanner} from './planner';
+import {presetPicker} from './presets';
 
 //
 // PUBLIC
@@ -26,22 +27,20 @@ export function buildCollege(): void {
       <div><h3>${esc(c.name)}</h3><p class="small muted">age ${c.age} · graduates high school ${
         esc(tl.graduation)} · 529 today ${fmt(c.college_529.balance)}${
         c.note ? ` · ${esc(c.note)}` : ''}</p></div>
-      <div class="ctl"><label for="kc-${id}">Monthly contribution</label><input class="amt"
-        id="kc-${id}" type="number" step="50" inputmode="decimal"></div>
+      <div class="row"><span>Monthly contribution</span><span><span class="num" id="kc-${id}"></span>
+        <a class="small" href="#budget">set in Budgeting › Savings</a></span></div>
       <div style="display:grid;gap:6px"><span class="eyebrow">School</span><div class="seg"
         data-f="school">${Object.entries(col.schools).map(([key, s]) =>
           `<button type="button" data-v="${esc(key)}">${esc(s.name)}</button>`).join('')}</div></div>
       <div class="ctl"><label for="ky-${id}">Cost per year today</label><input class="amt"
         id="ky-${id}" type="number" step="1000" inputmode="decimal"></div>
       <fieldset class="scen"><legend class="eyebrow">Return &amp; college cost inflation</legend>
-        <div class="scen-opts">${Object.entries(col.presets).map(([key, p]) => `<label><input
-          type="checkbox" data-preset="${esc(key)}">${esc(p.name)} <span class="small muted">${
-          p.return_pct}% / ${p.inflation_pct}%</span></label>`).join('')}</div>
+        <div class="presets" id="kp-${id}"></div>
         <div class="ctl"><label for="kr-${id}">Investment return</label><span class="num"
           id="krv-${id}"></span><input type="range" id="kr-${id}" min="0" max="10" step="0.5"></div>
         <div class="ctl"><label for="ki-${id}">College cost inflation</label><span class="num"
           id="kiv-${id}"></span><input type="range" id="ki-${id}" min="0" max="8" step="0.5"></div>
-        <span class="small muted">Tick a preset to set both sliders, then fine-tune.</span>
+        <span class="small muted">Pick a preset to set both sliders, then fine-tune.</span>
       </fieldset>
       <div class="out" id="ko-${id}"></div>
     </div>`;
@@ -49,11 +48,6 @@ export function buildCollege(): void {
   d.children.forEach((c) => {
     const cs = () => app.S.cs[c.id];
     const card = $(`kid-${c.id}`);
-    $in(`kc-${c.id}`).addEventListener('input', (e) => {
-      app.S.st.sav[`529:${c.id}`].amt = num(e.target as HTMLInputElement);
-      fillPlanner();
-      changed();
-    });
     $in(`ky-${c.id}`).addEventListener('input', (e) => {
       cs().cost = num(e.target as HTMLInputElement);
       changed();
@@ -73,14 +67,11 @@ export function buildCollege(): void {
         changed();
       });
     });
-    card.querySelectorAll<HTMLInputElement>('[data-preset]').forEach((cb) => {
-      cb.addEventListener('change', () => {
-        const p = col.presets[cb.dataset.preset!];
-        cs().ret = p.return_pct;
-        cs().inf = p.inflation_pct;
-        changed();
-      });
-    });
+    marks.push(presetPicker($(`kp-${c.id}`), 'college', () => [cs().ret, cs().inf], (ret, inf) => {
+      cs().ret = ret;
+      cs().inf = inf;
+      changed();
+    }));
   });
   onChange(updateCollege);
   updateCollege();
@@ -89,20 +80,18 @@ export function buildCollege(): void {
 //
 // INTERNAL
 //
+const marks: Array<() => void> = [];
 
 /** Refreshes every card's inputs and projection. */
 function updateCollege(): void {
   const d = app.d;
   const col = d.p.assumptions.college;
+  marks.forEach((mark) => mark());
   d.children.forEach((c, k) => {
     const s = app.S.cs[c.id];
-    const pct = app.S.st.sav[`529:${c.id}`]?.mode === 'pct';
     const m = budget(d, app.S.st).amt[`529:${c.id}`] ?? 0;
     const card = $(`kid-${c.id}`);
-    const kc = $in(`kc-${c.id}`);
-    kc.disabled = pct;
-    kc.title = pct ? 'A share of the left-over: change it in the planner\'s Savings box' : '';
-    if (document.activeElement !== kc) kc.value = String(Math.round(m));
+    $(`kc-${c.id}`).textContent = `${fmt(m)}/mo`;
     const ky = $in(`ky-${c.id}`);
     if (document.activeElement !== ky) ky.value = String(s.cost);
     $in(`kr-${c.id}`).value = String(s.ret);
@@ -111,10 +100,6 @@ function updateCollege(): void {
     $(`kiv-${c.id}`).textContent = `${s.inf}%`;
     card.querySelectorAll<HTMLButtonElement>('.seg button').forEach((b) => {
       b.setAttribute('aria-pressed', String(b.dataset.v === s.school));
-    });
-    card.querySelectorAll<HTMLInputElement>('[data-preset]').forEach((cb) => {
-      const p = col.presets[cb.dataset.preset!];
-      cb.checked = p.return_pct === s.ret && p.inflation_pct === s.inf;
     });
     const x = kidCalc(d, app.S, k);
     const cov = Math.round(x.pct * 100);
