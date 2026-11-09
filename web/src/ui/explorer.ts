@@ -25,7 +25,7 @@ const MAX_ROWS = 400;
 export function buildExplorer(): void {
   const d = app.d;
   monthOf = new Map(d.p.months.map((m, i) => [m, i]));
-  spendOT = d.oneTime;
+  spendOT = d.costs;
   credCats = d.credits;
   REG_M = d.p.months.map((_, m) => sum(d.regular.map((c) => d.byCat[c][m])));
   OT_M = d.p.months.map((_, m) => sum(spendOT.map((c) => d.byCat[c][m])));
