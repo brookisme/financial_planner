@@ -15,8 +15,11 @@ import {renderCategorizeTab} from './categorize';
 const TABS: Array<[string, string]> = [['household', 'Household'], ['money', 'Savings & income'],
   ['assumptions', 'Assumptions'], ['sources', 'Data sources'], ['categories', 'Categories'],
   ['categorize', 'Categorize'], ['share', 'Share plan']];
-const KINDS: Array<[string, string]> = [['spending', 'Regular'], ['one_time', 'One-time'],
+const KINDS: Array<[string, string]> = [['spending', 'Regular'], ['annual', 'Annual expense'],
+  ['one_time', '1-time purchase'], ['emergency', 'Emergency fund cost'],
   ['credit', 'Credit (money in)'], ['ignore', 'Ignore']];
+const MODES: Array<[string, string]> = [['fixed', 'Fixed $ per month'],
+  ['pct', '% of what is left each month']];
 const CLAIM_AGES = [62, 63, 64, 65, 66, 67, 68, 69, 70];
 
 //
@@ -211,6 +214,7 @@ function formDialog(title: string, html: string, onSave: (form: HTMLElement) => 
       id="fd-save">Save</button></div></div>`;
   const body = dlg.querySelector<HTMLElement>('#fd-body')!;
   wireLists(body, templates);
+  wireModes(body);
   dlg.querySelectorAll('[data-x]').forEach((b) => b.addEventListener('click', () => dlg.close()));
   dlg.querySelector('#fd-save')!.addEventListener('click', async () => {
     try {
@@ -263,11 +267,11 @@ function renderHousehold(el: HTMLElement): void {
     <div class="panel" style="display:grid;gap:10px">
       <div class="sec-head"><h3>Children</h3><span class="small muted">Each child gets a 529 card.</span></div>
       <div class="cards">${children.map((c, i) => `<div class="card"><div class="card-head"><b>${
-        esc(c.name)}</b><span class="small muted">age ${esc(c.age)}</span></div>
+        esc(c.name ?? `Child ${i + 1}`)}</b><span class="small muted">age ${esc(c.age)}</span></div>
         <div class="row"><span>529 balance</span><span class="num">${
           money((c.college_529 as Dict|undefined)?.balance)}</span></div>
         <div class="row"><span>529 per month</span><span class="num">${
-          money((c.college_529 as Dict|undefined)?.monthly)}</span></div>
+          contribText((c.college_529 as Dict|undefined) ?? {})}</span></div>
         <div class="card-actions"><button class="btn sm" type="button" data-edit-c="${i}">Edit</button><button
           class="btn sm danger" type="button" data-rm-c="${i}">Remove</button></div></div>`).join('')}
         <button class="card btn add" type="button" id="add-child" style="place-content:center;min-height:120px">+ Add child</button></div>
@@ -368,17 +372,22 @@ function childForm(i: number|null, children: Dict[], saveHH: () => Promise<void>
   const col = (c.college_529 as Dict|undefined) ?? {};
   const schools = schoolOptions();
   const html = `<div class="fgrid">
-      ${input('name', 'Name', c.name, 'text', 'A generic name is safest, e.g. Child 1')}
+      ${input('name', 'Name', c.name, 'text', 'Empty: "Child 1", "Child 2"… by position',
+              'data-optional')}
       ${input('age', 'Age', c.age, 'number')}
       ${input('hs_graduation', 'High school graduation (YYYY-MM)', c.hs_graduation ?? '', 'text',
               'Optional: estimated from age if empty', 'data-optional placeholder="2034-06"')}
       ${input('college_529.balance', '529 balance today', col.balance ?? 0, 'number')}
-      ${input('college_529.monthly', '529 contribution per month', col.monthly ?? 0, 'number')}
+      ${contribFields(col, 'college_529.', '529 contribution')}
       ${select('school', 'Planned school', schools, c.school ?? schools[0]?.[0])}
       ${input('note', 'Note for the card', c.note ?? '', 'text', '', 'data-optional')}
     </div>`;
-  formDialog(i === null ? 'Add child' : `Edit ${c.name}`, html, async (form) => {
-    const next = {...(i === null ? {} : children[i]), ...readFields(form)};
+  formDialog(i === null ? 'Add child' : `Edit ${c.name ?? `Child ${i + 1}`}`, html,
+             async (form) => {
+    const fields = readFields(form);
+    fields.college_529 = contribOut((fields.college_529 as Dict|undefined) ?? {});
+    const next = {...(i === null ? {} : children[i]), ...fields};
+    if (!(next as Dict).name) delete (next as Dict).name;
     if (!(next as Dict).hs_graduation) delete (next as Dict).hs_graduation;
     if (!(next as Dict).note) delete (next as Dict).note;
     const list = children.slice();
@@ -400,42 +409,108 @@ function schoolOptions(): Array<[string, string]> {
 
 // ---------- money ----------
 
-/** Other income, savings accounts and investments. */
+/** Other income, savings accounts / emergency funds and investments. */
 function renderMoney(el: HTMLElement): void {
   const savings = section<Dict[]>('savings', []);
   const investments = section<Dict[]>('investments', []);
-  const savRow = (r: Dict = {}) => input('name', 'Name', r.name ?? 'Savings') +
-      input('monthly', 'Per month', r.monthly ?? 0, 'number') +
+  const overflow: Array<[string, string]> = [['', 'The first investment'],
+    ...investments.map((v): [string, string] => [String(v.id ?? slug(String(v.name ?? ''))),
+      String(v.name ?? 'Investments')])];
+  const savRow = (r: Dict = {}) => input('name', 'Name', r.name ?? 'Savings account') +
+      select('type', 'Type', [['savings', 'Savings account'], ['emergency', 'Emergency fund']],
+             r.type ?? 'savings') +
+      input('balance', 'Balance today', r.balance ?? 0, 'number') +
+      input('max_balance', 'Max balance', r.max_balance ?? '', 'number',
+            'Optional: once reached, the rest goes to an investment') +
+      select('overflow_to', 'Then invest in', overflow, r.overflow_to ?? '') +
+      input('return_pct', 'Yearly interest (%)', r.return_pct ?? 0, 'number') +
+      contribFields(r) +
       check('stops_at_retirement', 'Stops at retirement', r.stops_at_retirement ?? true);
-  const invRow = (r: Dict = {}) => input('name', 'Name', r.name ?? 'Brokerage') +
+  const invRow = (r: Dict = {}) => input('name', 'Name', r.name ?? 'Stocks') +
+      select('type', 'Type', [['stocks', 'Stocks'], ['bonds', 'Bonds']], r.type ?? 'stocks') +
       input('balance', 'Balance today', r.balance ?? 0, 'number') +
       input('return_pct', 'Yearly return (%)', r.return_pct ?? 0, 'number') +
-      input('monthly', 'Added per month', r.monthly ?? 0, 'number');
+      contribFields(r);
   el.innerHTML = `<div class="panel form">
       <h3>Other income</h3>
       <div class="fgrid">${input('other', 'Other take-home income per month',
         cfg.raw.other_income_monthly ?? 0, 'number')}</div>
-      <h3>Savings</h3><p class="small muted">Money moved to savings every month. It shows in the
-        planner's Savings box.</p>
-      ${listEditor('savings', savings, savRow, '+ Add savings')}
-      <h3>Investments</h3><p class="small muted">Brokerage or stock accounts. Each grows at its own
-        return (0% = off) and becomes retirement income.</p>
+      <h3>Savings</h3><p class="small muted">Savings accounts and emergency funds. Emergency fund
+        costs (a category kind) are paid from the emergency funds. With a max balance, anything
+        past it goes to an investment. Each one adds a fixed amount per month or a share of what
+        is left over each month (after spending, taxes and the fixed amounts), optionally kept
+        between a minimum and a maximum.</p>
+      ${listEditor('savings', savings, savRow, '+ Add savings account or emergency fund')}
+      <h3>Investments</h3><p class="small muted">Stock and bond accounts. Each grows at its own
+        return (0% = off) and becomes retirement income. Contributions stop at retirement.</p>
       ${listEditor('investments', investments, invRow, '+ Add investment account')}
       <div class="btns"><button class="btn primary" type="button" id="m-save">Save</button></div>
       <p class="msg" id="m-msg"></p></div>`;
   wireLists(el, {savings: () => savRow(), investments: () => invRow()});
+  wireModes(el);
   el.querySelector('#m-save')!.addEventListener('click', async () => {
     const msg = el.querySelector('#m-msg');
     try {
       const other = (el.querySelector('[data-k="other"]') as HTMLInputElement).value;
       await save('other_income_monthly', +other || 0);
-      await save('savings', mergeIds(savings, readRows(el, 'savings')));
-      await save('investments', mergeIds(investments, readRows(el, 'investments')));
+      await save('investments', mergeIds(investments, readRows(el, 'investments').map(contribOut)));
+      await save('savings', mergeIds(savings, readRows(el, 'savings').map((r) => {
+        const out = contribOut(r);
+        if (!out.overflow_to || out.max_balance === undefined) delete out.overflow_to;
+        return out;
+      })));
       report(msg);
     } catch (err) {
       report(msg, err);
     }
   });
+}
+
+/** Contribution fields: a fixed amount, or a % of the left-over with an optional min / max. */
+function contribFields(r: Dict, prefix = '', label = 'Contribution'): string {
+  const pct = r.left_pct != null;
+  return select(`${prefix}_mode`, label, MODES, pct ? 'pct' : 'fixed') +
+      `<span class="contents" data-when="fixed"${pct ? ' hidden' : ''}>${
+        input(`${prefix}monthly`, 'Per month', r.monthly ?? 0, 'number')}</span>` +
+      `<span class="contents" data-when="pct"${pct ? '' : ' hidden'}>${
+        input(`${prefix}left_pct`, '% of left-over', r.left_pct ?? '', 'number')}${
+        input(`${prefix}min_monthly`, 'At least per month', r.min_monthly ?? '', 'number',
+              'Optional')}${
+        input(`${prefix}max_monthly`, 'At most per month', r.max_monthly ?? '', 'number',
+              'Optional')}</span>`;
+}
+
+/** Shows the fixed or the % fields when a contribution mode changes. */
+function wireModes(root: Element): void {
+  root.addEventListener('change', (e) => {
+    const sel = e.target as HTMLElement;
+    if (!(sel instanceof HTMLSelectElement) || !sel.dataset.k?.endsWith('_mode')) return;
+    sel.closest('label')!.parentElement!.querySelectorAll<HTMLElement>(':scope > [data-when]')
+        .forEach((x) => x.hidden = x.dataset.when !== sel.value);
+  });
+}
+
+/** Turns read contribution fields into config: % fields only when the mode is %. */
+function contribOut(f: Dict): Dict {
+  const {_mode: mode, ...out} = f;
+  if (mode === 'pct') {
+    out.left_pct = out.left_pct ?? 0;
+  } else {
+    delete out.left_pct;
+    delete out.min_monthly;
+    delete out.max_monthly;
+  }
+  return out;
+}
+
+/** A contribution for a card: "$500" or "25% of left-over". */
+function contribText(c: Dict): string {
+  return c.left_pct != null ? `${c.left_pct}% of left-over` : fmt(+(c.monthly as number) || 0);
+}
+
+/** The id the server gives an item without one (see schema.slugify). */
+function slug(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'item';
 }
 
 /** Keeps the ids of rows that were already there (matched by position). */
@@ -824,11 +899,14 @@ function renderCategories(el: HTMLElement): void {
   el.innerHTML = `<div class="panel" style="display:grid;gap:10px">
       <div class="sec-head"><h3>Categories</h3><span class="small muted">Saved in ${
         esc(fileOf('categories'))}. Renaming a category also updates the rules that use it.</span></div>
-      <p class="small muted"><b>Kind:</b> regular spending is averaged in the planner; one-time
-        costs get an on/off toggle; credits (money in) can be subtracted; ignore is for transfers,
-        card payments and paychecks. <b>Kids gone / retired</b> are % changes used by Spending over
-        time. <b>On by default</b>, <b>in retirement</b> and <b>tax</b> apply to one-time costs and
-        credits. <b>Offsets</b>: for a credit, the category it reduces.</p>
+      <p class="small muted"><b>Kind:</b> regular spending is averaged in the planner. Annual
+        expenses (taxes, insurance), 1-time purchases and emergency fund costs each get an on/off
+        toggle in their own planner box; emergency fund costs are paid from the emergency fund.
+        Credits (money in) can be subtracted; ignore is for transfers, card payments and
+        paychecks. <b>Kids gone / retired</b> are % changes used by Spending over time. <b>On by
+        default</b> and <b>in retirement</b> apply to those costs and to credits; <b>tax</b> puts
+        an annual expense or purchase in the tax set-aside. <b>Offsets</b>: for a credit, the
+        category it reduces.</p>
       <div class="ptable-scroll"><table class="dtable edit" id="cat-table"><thead><tr>
         <th>Name</th><th>Kind</th><th>Group</th><th>Flexible</th><th>Kids gone %</th><th>Retired %</th>
         <th>On by default</th><th>In retirement</th><th>Tax</th><th>Offsets</th><th>Toggle label</th>
