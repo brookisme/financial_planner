@@ -92,6 +92,9 @@ function drawFuture(): void {
   const R = retirementIncome(d, S, S.rs.age);
   const rS = spendAt(d, S, RY);
   const now = spendAt(d, S, d.todayYear);
+  const early: Array<[number, string]> = d.partners.filter((p) => R.years[p.id] < RY)
+      .map((p) => [R.years[p.id], `${p.name} retired`]);
+  const retired = early.length ? 'All retired' : 'Retired';
   d.regular.forEach((c) => {
     $(`fc-t-${c}`).textContent = fmt(S.st.plan[d.cats[c].name] ?? 0);
     $(`fc-r-${c}`).textContent = fmt(rS.cats[d.cats[c].name]);
@@ -112,7 +115,7 @@ function drawFuture(): void {
   const Rr = 12;
   const events: Array<[number, string]> = d.children.map((c, k) =>
       [Math.floor(d.gradT(k)), `${c.name} out`] as [number, string])
-      .concat([[RY, 'Retired']]).filter(([yr]) => yr >= years[0] && yr <= years[years.length - 1]);
+      .concat(early, [[RY, retired]]).filter(([yr]) => yr >= years[0] && yr <= years[years.length - 1]);
   const T = 16 + events.length * 12;
   const B = 30;
   const pw = W - L - Rr;
@@ -174,7 +177,7 @@ function drawFuture(): void {
     const yr = Math.floor(d.gradT(k)) + 1;
     if (yr < RY) stages.push([yr, `${c.name} out`]);
   });
-  stages.push([RY, 'Retired']);
+  stages.push(...early, [RY, retired]);
   const ssDone = R.fullYear;
   if (ssDone > RY) stages.push([ssDone, 'All Social Security started']);
   stages.sort((a, b) => a[0] - b[0]);
