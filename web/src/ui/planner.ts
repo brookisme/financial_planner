@@ -1,13 +1,15 @@
 /**
  * @fileoverview The summary strip and the monthly planner: category table (grouped, with credit
- * sub-rows), income, savings and one-time cost toggles.
+ * sub-rows), income, savings (fixed or a share of the left-over) and the cost toggles (annual
+ * expenses, 1-time purchases, emergency fund costs).
  *
  * License: BSD 3-Clause
  */
 
 import {$, app, changed, num, onChange, scrollToEl} from '../app';
 import {esc, fk, fmt, sum} from '../format';
-import {budget, clone, oneTimeNet} from '../model';
+import {budget, clone, COST_KINDS, oneTimeNet, overflowTarget, simulate} from '../model';
+import type {SavLine} from '../types';
 import {selectCat} from './explorer';
 
 //
@@ -42,7 +44,8 @@ export function fillPlanner(): void {
     el.value = String(S.st.inc[el.dataset.inc!] ?? 0);
   });
   document.querySelectorAll<HTMLInputElement>('[data-sav]').forEach((el) => {
-    el.value = String(S.st.sav[el.dataset.sav!] ?? 0);
+    const v = S.st.sav[el.dataset.sav!]?.[el.dataset.f as keyof SavLine];
+    el.value = v == null ? '' : String(v);
   });
 }
 
@@ -134,7 +137,7 @@ function bindToggles(root: HTMLElement): void {
   });
 }
 
-/** Income, savings and one-time panels. */
+/** Income, savings and cost panels. */
 function buildSide(): void {
   const {d} = app;
   const p = d.p;
@@ -145,35 +148,25 @@ function buildSide(): void {
         inputmode="decimal"></div>`;
   $('inc-rows').innerHTML = d.partners.map((x) => row(x.id, 'inc', x.name, x.take_home_note))
       .join('') + row('other', 'inc', 'Other income');
+  const kind = {stocks: 'stocks', bonds: 'bonds', savings: 'savings', emergency: 'emergency fund'};
   $('sav-rows').innerHTML =
-      d.children.map((c) => row(`529:${c.id}`, 'sav', `529, ${c.name}`)).join('') +
-      p.savings.map((s) => row(`sav:${s.id}`, 'sav', s.name)).join('') +
-      p.investments.map((v) => row(`inv:${v.id}`, 'sav', v.name, 'investing')).join('');
-  $('sav-note').textContent = (d.children.length ?
-      '529 contributions stop at each child\'s high school graduation. ' : '') +
-      (p.investments.length ?
-          'Investments are added to their balance in Retirement and stop at retirement.' : '');
-  const ot = d.oneTime.map((i) => {
-    const cat = d.cats[i];
-    const total = sum(d.byCat[i]);
-    const label = cat.label || `Include ${cat.name.toLowerCase()}`;
-    let h = `<label class="toggle"><input type="checkbox" data-tg="${esc(cat.name)}"><span>${
-        esc(label)} <span class="num">${fmt(d.avg(i))}</span>/mo <span class="small muted">(${
-        fmt(total)} over ${d.n} months${cat.note ? `; ${esc(cat.note)}` : ''})</span></span></label>`;
-    d.offsetsOf(cat.name).forEach((c) => {
-      const cc = d.cats[c];
-      h += `<label class="toggle" style="padding-left:24px"><input type="checkbox"
-        data-tg="${esc(cc.name)}" data-parent="${esc(cat.name)}"><span>${
-          esc(cc.label || `Subtract ${cc.name.toLowerCase()}`)} <span class="num">${
-          fmt(d.credAvg(c))}</span>/mo <span class="small muted">(${fmt(-sum(d.byCat[c]))}${
-          cc.note ? `; ${esc(cc.note)}` : ''}). Net: <span class="num" id="ot-net-${i}"></span>/mo
-        </span></span></label>`;
-    });
-    return h;
-  }).join('');
-  $('ot-rows').innerHTML = ot;
-  $('ot-panel').hidden = !d.oneTime.length;
-  const side = $('ot-rows').parentElement!.parentElement!;
+      d.children.map((c) => savRow(`529:${c.id}`, `529, ${c.name}`)).join('') +
+      p.savings.map((s) => savRow(`sav:${s.id}`, s.name, kind[s.type])).join('') +
+      p.investments.map((v) => savRow(`inv:${v.id}`, v.name, kind[v.type])).join('');
+  $('sav-note').textContent = [
+    d.children.length ? '529 contributions stop at each child\'s high school graduation.' : '',
+    p.investments.length ? 'Investments are added to their balance in Retirement and stop at ' +
+        'retirement.' : '',
+    '"% left" puts in a share of what is left each month after spending, taxes and the fixed ' +
+        'amounts.',
+  ].filter(Boolean).join(' ');
+  COST_KINDS.forEach((k) => {
+    const list = k === 'annual' ? d.annual : k === 'one_time' ? d.oneTime : d.emergency;
+    const panel = $(`cost-${k}`);
+    panel.hidden = !list.length;
+    panel.querySelector('.cost-rows')!.innerHTML = list.map(costToggle).join('');
+  });
+  const side = $('sav-rows').closest('.side') as HTMLElement;
   bindToggles(side);
   side.querySelectorAll<HTMLInputElement>('[data-inc]').forEach((el) => {
     el.addEventListener('input', () => {
@@ -183,7 +176,16 @@ function buildSide(): void {
   });
   side.querySelectorAll<HTMLInputElement>('[data-sav]').forEach((el) => {
     el.addEventListener('input', () => {
-      app.S.st.sav[el.dataset.sav!] = num(el);
+      const f = el.dataset.f as 'amt'|'pct'|'min'|'max';
+      const line = app.S.st.sav[el.dataset.sav!];
+      if (f === 'min' || f === 'max') line[f] = el.value === '' ? null : num(el);
+      else line[f] = num(el);
+      changed();
+    });
+  });
+  side.querySelectorAll<HTMLButtonElement>('[data-mode]').forEach((b) => {
+    b.addEventListener('click', () => {
+      app.S.st.sav[b.dataset.key!].mode = b.dataset.mode as SavLine['mode'];
       changed();
     });
   });
@@ -249,7 +251,7 @@ function update(): void {
   const td = $('t-d');
   td.textContent = dT ? (dT > 0 ? '+' : '−') + fmt(Math.abs(dT)) : '';
   td.className = `delta num ${dT > 0 ? 'neg' : dT < 0 ? 'pos' : ''}`;
-  d.oneTime.forEach((i) => {
+  d.costs.forEach((i) => {
     const el = document.getElementById(`ot-net-${i}`);
     if (el) el.textContent = fmt(oneTimeNet(d, st, i));
     const on = !!st.on[d.cats[i].name];
@@ -259,7 +261,88 @@ function update(): void {
           sub.parentElement!.classList.toggle('pane-off', !on);
         });
   });
+  updateSavings();
   updateStrip();
+}
+
+/** One contribution line: a fixed amount, or a percent of the left-over with min / max. */
+function savRow(key: string, label: string, note = ''): string {
+  const k = esc(key);
+  if (label.toLowerCase().includes(note)) note = '';
+  const inp = (f: string, cls: string, aria: string, step = 50) => `<input class="${cls}"
+    type="number" step="${step}" inputmode="decimal" data-sav="${k}" data-f="${f}"
+    aria-label="${esc(label)} ${aria}">`;
+  return `<div class="savline" data-line="${k}"><div class="row"><span>${esc(label)}${note ?
+      ` <span class="small muted">· ${esc(note)}</span>` : ''}</span><span class="ctls"><span
+      class="seg sm" role="group" aria-label="${esc(label)} contribution type"><button
+      type="button" data-key="${k}" data-mode="fixed">$/mo</button><button type="button"
+      data-key="${k}" data-mode="pct">% left</button></span><span data-show="fixed">${
+      inp('amt', 'amt', 'per month')}</span><span data-show="pct">${
+      inp('pct', 'amt pct', 'percent of left-over', 5)}%</span></span></div>
+    <div class="pctrow" data-show="pct">min ${inp('min', 'amt', 'at least per month')} max ${
+      inp('max', 'amt', 'at most per month')} <span class="num" data-out="${k}"></span></div>
+    <span class="small muted" data-note="${k}"></span></div>`;
+}
+
+/** A cost category toggle with any credits nested under it. */
+function costToggle(i: number): string {
+  const d = app.d;
+  const cat = d.cats[i];
+  const total = sum(d.byCat[i]);
+  const label = cat.label || `Include ${cat.name.toLowerCase()}`;
+  let h = `<label class="toggle"><input type="checkbox" data-tg="${esc(cat.name)}"><span>${
+      esc(label)} <span class="num">${fmt(d.avg(i))}</span>/mo <span class="small muted">(${
+      fmt(total)} over ${d.n} months${cat.note ? `; ${esc(cat.note)}` : ''})</span></span></label>`;
+  d.offsetsOf(cat.name).forEach((c) => {
+    const cc = d.cats[c];
+    h += `<label class="toggle" style="padding-left:24px"><input type="checkbox"
+      data-tg="${esc(cc.name)}" data-parent="${esc(cat.name)}"><span>${
+        esc(cc.label || `Subtract ${cc.name.toLowerCase()}`)} <span class="num">${
+        fmt(d.credAvg(c))}</span>/mo <span class="small muted">(${fmt(-sum(d.byCat[c]))}${
+        cc.note ? `; ${esc(cc.note)}` : ''}). Net: <span class="num" id="ot-net-${i}"></span>/mo
+      </span></span></label>`;
+  });
+  return h;
+}
+
+/** Contribution modes, computed amounts, fund balances and the emergency note. */
+function updateSavings(): void {
+  const {d, S} = app;
+  const b = budget(d, S.st);
+  const sim = simulate(d, S);
+  const invName = (id: string) => d.p.investments.find((v) => v.id === id)?.name ?? id;
+  document.querySelectorAll<HTMLElement>('[data-line]').forEach((el) => {
+    const key = el.dataset.line!;
+    const line = S.st.sav[key];
+    el.querySelectorAll<HTMLButtonElement>('[data-mode]').forEach((btn) => {
+      btn.setAttribute('aria-pressed', String(btn.dataset.mode === line.mode));
+    });
+    el.querySelectorAll<HTMLElement>('[data-show]').forEach((x) => {
+      x.hidden = x.dataset.show !== line.mode;
+    });
+    el.querySelector<HTMLElement>('[data-out]')!.textContent = `= ${fmt(b.amt[key] ?? 0)}/mo`;
+    const note: string[] = [];
+    const sv = d.p.savings.find((x) => `sav:${x.id}` === key);
+    if (sv) {
+      note.push(`${fmt(sv.balance)} today${sv.max_balance != null ?
+          ` of ${fmt(sv.max_balance)} max` : ''}`);
+      if (sv.max_balance != null) {
+        const full = sim.full[key];
+        const to = overflowTarget(d, sv);
+        note.push(full == null ? 'won\'t reach the max at this rate' :
+            full <= d.todayYear ? 'at the max' : `reaches the max in ${full}`);
+        if (to) note.push(`then goes to ${invName(to)}`);
+      }
+    }
+    el.querySelector<HTMLElement>('[data-note]')!.textContent = note.join(' · ');
+  });
+  if (d.emergency.length) {
+    const names = d.funds.map((f) => f.name);
+    $('em-note').textContent = names.length ?
+        `${fmt(b.emergency)}/mo is paid from ${names.join(' and ')}, not the monthly budget. ` +
+        'Whatever the fund can\'t cover comes out of that month (see Spending over time).' :
+        'No emergency fund in Settings › Savings & income, so these count as monthly spending.';
+  }
 }
 
 /** The five figures at the top. */
@@ -270,7 +353,7 @@ function updateStrip(): void {
   $('s-inc').textContent = fmt(b.income);
   $('s-inc-note').textContent = `${d.partners.map((x) => x.name).join(' + ') || 'Household'}, net`;
   $('s-sp').textContent = fmt(b.spend);
-  const extras = d.oneTime.filter((i) => !d.cats[i].tax && st.on[d.cats[i].name])
+  const extras = [...d.annual, ...d.oneTime].filter((i) => !d.cats[i].tax && st.on[d.cats[i].name])
       .map((i) => `incl. ${d.cats[i].name.toLowerCase()}`);
   $('s-sp-note').textContent = [b.credits ? 'after credits' : 'regular categories', ...extras]
       .join(' · ');
@@ -278,9 +361,9 @@ function updateStrip(): void {
   const parts = [];
   if (d.children.length) parts.push('529s');
   d.p.savings.forEach((s) => parts.push(s.name));
-  if (b.investing) parts.push('investments');
+  if (b.investing) parts.push('investing');
   $('s-sv-note').textContent = parts.join(' + ') || 'none set';
-  const taxCats = d.oneTime.filter((i) => d.cats[i].tax && st.on[d.cats[i].name]);
+  const taxCats = [...d.annual, ...d.oneTime].filter((i) => d.cats[i].tax && st.on[d.cats[i].name]);
   $('s-tx').textContent = taxCats.length ? fmt(b.tax) : 'off';
   const nested = taxCats.flatMap((i) => d.offsetsOf(d.cats[i].name))
       .filter((c) => st.on[d.cats[c].name]);
