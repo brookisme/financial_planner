@@ -105,7 +105,9 @@ const BODY = `
 
 <h3 id="h-retire">Retirement</h3>
 <ul>
-  <li><b>The slider</b> is the first partner's retirement age; everyone retires that year.</li>
+  <li><b>The sliders</b>: the big one is the first partner's retirement age (the chart and table
+    follow it). Each other partner retires the same year unless you untick <i>same year as</i> and
+    set their own age.</li>
   <li><b>Income</b>: pensions, retirement accounts, investments and Social Security, before and
     after the retirement tax rate. Social Security that starts later is drawn as a dashed outline.</li>
   <li><b>Comparison</b> is against <i>projected</i> retirement spending (children gone,
