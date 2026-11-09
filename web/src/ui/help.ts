@@ -34,12 +34,14 @@ const BODY = `
 <table class="help-table">
   <tr><td>Household</td><td>Partners (age, take-home pay, raises, Social Security, pensions,
     retirement accounts) and children (age, 529).</td></tr>
-  <tr><td>Savings &amp; income</td><td>Other income, monthly savings and investment accounts.</td></tr>
+  <tr><td>Savings &amp; income</td><td>Other income, savings accounts and emergency funds (with an
+    optional max balance), and stock and bond accounts.</td></tr>
   <tr><td>Assumptions</td><td>Titles, how many months to average, retirement and college
     assumptions and presets.</td></tr>
   <tr><td>Data sources</td><td>One per kind of CSV export. Pick the file, click <i>Read columns</i>,
     check the date, description and amount columns, then <i>Preview</i>.</td></tr>
-  <tr><td>Categories</td><td>Names, kinds (regular, one-time, credit, ignore), planner groups and
+  <tr><td>Categories</td><td>Names, kinds (regular, annual expense, 1-time purchase, emergency fund
+    cost, credit, ignore), planner groups and
     how each changes when the kids leave or you retire.</td></tr>
   <tr><td>Categorize</td><td>Every transaction, sortable and filterable, plus the rule list.</td></tr>
 </table>
@@ -72,8 +74,14 @@ const BODY = `
   <li><b>Categories</b> start at their average, with the lowest and highest months beside them.</li>
   <li><b>Credits</b> (reimbursements, refunds) can sit under the category they offset, or below
     the total. Tick them to subtract them.</li>
-  <li><b>Yearly and one-time costs</b> (taxes, big purchases) are kept out of the averages. Tick
-    one to set money aside for it.</li>
+  <li><b>Savings</b>: each 529, savings account, emergency fund and investment adds either a
+    fixed <b>$/mo</b> or <b>% left</b>: a share of what is left each month after spending, taxes
+    and the fixed amounts, kept between an optional min and max. A savings account with a max
+    balance sends the rest to an investment once it's full; the note under it says when.</li>
+  <li><b>Annual expenses</b> (taxes, insurance), <b>1-time purchases</b> and <b>emergency fund
+    costs</b> are kept out of the averages. Tick one to count it. Emergency fund costs are paid
+    from the emergency fund instead of the monthly budget; only what the fund can't cover comes
+    out of the month.</li>
   <li><i>Try 10% less on flexible spending</i> trims the categories marked flexible.</li>
 </ul>
 
@@ -138,8 +146,8 @@ const BODY = `
   <dt>Where are my changes kept?</dt><dd>In <span class="mono">.financial_planner/state.json</span>
     inside the plan folder. Settings are in the YAML files.</dd>
   <dt>I changed the YAML by hand. Do I need to restart?</dt><dd>No, just reload the page.</dd>
-  <dt>Why are some months huge?</dt><dd>One-time costs are shown in gray and kept out of the
-    regular averages.</dd>
+  <dt>Why are some months huge?</dt><dd>Annual, 1-time and emergency costs are shown in gray and
+    kept out of the regular averages.</dd>
 </dl>`;
 
 //
