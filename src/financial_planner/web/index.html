@@ -28,7 +28,7 @@ try{var t=localStorage.getItem('fp-theme');if(t==='light'||t==='dark'){document.
     <h1 id="title">Household Budget</h1>
     <p class="muted" id="subtitle"></p>
     <nav class="tabs" aria-label="Sections">
-      <a href="#spending">Spending</a><a href="#budget">Budgeting</a><a href="#college" id="nav-college">College 529s</a><a href="#retire">Retirement</a><a href="#future">Spending over time</a><a href="#help" class="help-link">Help</a>
+      <a href="#spending">Spending</a><a href="#budget">Budgeting</a><a href="#college" id="nav-college">College 529s</a><a href="#property" id="nav-property">Property</a><a href="#retire">Retirement</a><a href="#future">Spending over time</a><a href="#help" class="help-link">Help</a>
     </nav>
   </header>
 
@@ -81,7 +81,7 @@ try{var t=localStorage.getItem('fp-theme');if(t==='light'||t==='dark'){document.
       <span class="small muted" id="planner-sub">Plan each month and save it as a budget.</span>
     </div>
     <div class="panel sbar" id="budgets" aria-label="Budgets">
-      <div class="sb-row"><span class="eyebrow">Budgets</span><div class="chips" id="bg-tabs" data-bg-tabs role="group" aria-label="Saved budgets"></div></div>
+      <div class="sb-row"><span class="eyebrow">Budgets</span><div class="chips" id="bg-tabs" data-bg-tabs role="group" aria-label="Saved budgets"></div><button class="btn sm fold-all" type="button" id="p-fold-all">Collapse Settings</button></div>
       <div class="sb-row">
         <input type="text" id="bg-name" class="sb-name" placeholder="Name this budget, e.g. Less dining out" aria-label="Budget name" maxlength="60">
         <button class="btn primary" id="bg-save" type="button">Save as new</button>
@@ -99,7 +99,7 @@ try{var t=localStorage.getItem('fp-theme');if(t==='light'||t==='dark'){document.
           <tbody id="psum" class="psum"></tbody>
         </table>
       </div>
-      <div class="side">
+      <div class="side" id="p-side">
         <div class="panel"><h3>Income (take-home)</h3><div id="inc-rows" style="display:grid;gap:10px"></div></div>
         <div class="panel"><h3>Savings</h3><div id="sav-rows" style="display:grid;gap:14px"></div><p class="small muted" id="sav-note"></p></div>
         <div class="panel"><h3>Annual expenses</h3><div id="an-rows" class="an-rows"></div><div class="btns"><button class="btn sm add" id="an-add" type="button">+ Add</button></div><div class="row an-total"><span>Total</span><span class="num" id="an-total"></span></div></div>
@@ -118,6 +118,16 @@ try{var t=localStorage.getItem('fp-theme');if(t==='light'||t==='dark'){document.
     <div class="panel sbar bg-mirror" aria-label="Budget"><div class="sb-row"><span class="eyebrow">Budget</span><div class="chips" data-bg-tabs role="group" aria-label="Saved budgets"></div></div><p class="small muted" data-bg-state aria-live="polite"></p></div>
     <div class="kids" id="kids"></div>
     <p class="note">Contributions stop at high school graduation. The comparison uses the balance on graduation day, so it ignores growth while the money is spent down. "Today's dollars" converts the gap back at the college-cost inflation rate you pick.</p>
+  </section>
+
+  <section id="property">
+    <div class="sec-head">
+      <h2>Property</h2>
+      <span class="small muted">Homes, cars and rentals: what they're worth, what's owed and when it's paid off. Set them up in <a href="#settings/property">Settings › Property</a>.</span>
+    </div>
+    <div class="r-totals" id="pr-totals"></div>
+    <div class="kids" id="props"></div>
+    <p class="note">Values are in dollars of each year. A home grows by its yearly rate; something with a lifetime (a car) goes down to its end value, then is replaced at today's price grown by inflation. Loans follow their payment until paid off.</p>
   </section>
 
   <section id="retire">

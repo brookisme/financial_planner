@@ -133,17 +133,38 @@
       const k = this.cats[this.idx(this.cats[i].offsets ?? "")]?.kind;
       return k !== "one_time" && k !== "emergency";
     }
+    /** Homes, cars, rentals and other property. */
+    get props() {
+      return this.p.properties ?? [];
+    }
+    /** Today as a fractional year (March 2026 -> 2026.17). */
+    get todayT() {
+      return this.todayYear + (this.todayMonth - 1) / 12;
+    }
     /** Emergency funds (they pay for emergency costs, in config order). */
     get funds() {
       return this.p.savings.filter((s) => s.type === "emergency");
     }
-    /** Every contribution key: 529s, then savings, then investments. */
+    /** Every partner's retirement accounts, keyed acct:<partner id>:<index>. */
+    get accounts() {
+      return this.partners.flatMap((p) => p.accounts.map((acct, i) => ({ key: `acct:${p.id}:${i}`, partner: p, acct })));
+    }
+    /** Every contribution key: 529s, retirement accounts, savings, then investments. */
     get savKeys() {
       return [
         ...this.children.map((c) => `529:${c.id}`),
+        ...this.accounts.map((a) => a.key),
         ...this.p.savings.map((s) => `sav:${s.id}`),
         ...this.p.investments.map((v) => `inv:${v.id}`)
       ];
+    }
+    /**
+     * Whether a contribution comes straight out of pay (a pre-tax retirement account with a fixed
+     * amount) instead of from the left-over. A pre-tax account on "% left" or "rest" takes its
+     * share of the left-over like any other line.
+     */
+    fromPay(key, line) {
+      return line?.mode === "fixed" && this.accounts.some((a) => a.key === key && a.acct.pre_tax);
     }
     /** A child's high-school graduation as a fractional year (June 2034 -> 2034.5). */
     gradT(child) {
@@ -163,7 +184,11 @@
     };
     d.partners.forEach((x) => st.inc[x.id] = x.take_home_monthly);
     st.inc.other = p.other_income_monthly;
+    d.props.filter((x) => x.rent_monthly).forEach((x) => st.inc[`prop:${x.id}`] = x.rent_monthly);
+    const inf = p.assumptions.retirement.inflation_pct;
+    d.props.filter((x) => replaceMo(x, inf)).forEach((x) => st.annual.push({ name: `Replace ${x.name}`, amt: Math.round(replaceMo(x, inf) * 12) }));
     d.children.forEach((c) => st.sav[`529:${c.id}`] = savLine(c.college_529));
+    d.accounts.forEach((a) => st.sav[a.key] = savLine(a.acct));
     p.savings.forEach((s) => st.sav[`sav:${s.id}`] = savLine(s));
     p.investments.forEach((v) => st.sav[`inv:${v.id}`] = savLine(v));
     d.credits.forEach((i) => st.on[d.cats[i].name] = d.cats[i].default_on);
@@ -205,7 +230,7 @@
         monthly: pn.monthly
       });
       x.accounts.forEach((a, i2) => {
-        rs.acct[`${x.id}:${i2}`] = { on: true, bal: a.balance, monthly: a.monthly };
+        rs.acct[`${x.id}:${i2}`] = { on: true, bal: a.balance };
         rs.draw[`acct:${x.id}:${i2}`] = null;
       });
     });
@@ -344,16 +369,21 @@
     const credits = creditsMo(d, st);
     const annual = annualMo(st);
     const spend = regular - credits + (d.funds.length ? 0 : st.emerg ?? 0);
-    const { amt, left } = contributions(d.savKeys.map((k) => [k, st.sav[k]]), income - spend - annual);
+    const pay = (k) => d.fromPay(k, st.sav[k]);
+    const { amt, left } = contributions(d.savKeys.filter((k) => !pay(k)).map((k) => [k, st.sav[k]]), income - spend - annual);
+    const pre = d.savKeys.filter(pay);
+    pre.forEach((k) => amt[k] = st.sav[k]?.amt ?? 0);
+    const pretax = sum(pre.map((k) => amt[k]));
     const emergency = st.emerg ?? sum(d.funds.map((f) => amt[`sav:${f.id}`] ?? 0));
     const overflow = {};
     d.p.savings.forEach((sv) => {
       const to = overflowTarget(d, sv);
       if (to && sv.balance >= sv.max_balance) overflow[`sav:${sv.id}`] = to;
     });
-    const isInv = (k) => k.startsWith("inv:") || k in overflow;
-    const investing = sum(Object.entries(amt).filter(([k]) => isInv(k)).map(([, v]) => v));
-    const savings = sum(Object.entries(amt).filter(([k]) => !isInv(k)).map(([, v]) => v));
+    const isInv = (k) => k.startsWith("inv:") || k.startsWith("acct:") || k in overflow;
+    const taken = Object.entries(amt).filter(([k]) => !pay(k));
+    const investing = sum(taken.filter(([k]) => isInv(k)).map(([, v]) => v));
+    const savings = sum(taken.filter(([k]) => !isInv(k)).map(([, v]) => v));
     return {
       income,
       regular,
@@ -363,16 +393,11 @@
       spend,
       savings,
       investing,
+      pretax,
       amt,
       overflow,
       left
     };
-  }
-  function fv(p, m, n, r) {
-    const i = Math.pow(1 + r, 1 / 12) - 1;
-    let b = p;
-    for (let k = 0; k < n; k++) b = b * (1 + i) + m;
-    return b;
   }
   function kidCalc(d, s, k) {
     const child = d.children[k];
@@ -439,6 +464,7 @@
     const inv = investmentParts(d, s, base.yrs, sim.at, sim.paid);
     const parts = [
       ...base.parts.filter((x) => x.kind !== "ss"),
+      ...accountParts(d, s, a, sim.at, sim.paid),
       ...inv,
       ...base.parts.filter((x) => x.kind === "ss")
     ];
@@ -474,6 +500,76 @@
   function incomeAt(d, s, y) {
     return incomeFrom(d, s, retirementIncome(d, s, s.rs.age), y);
   }
+  function loanMonths(l) {
+    if (l.balance <= 0) return 0;
+    const r = l.rate_pct / 100 / 12;
+    if (!r) return Math.ceil(l.balance / l.payment_monthly);
+    return Math.ceil(-Math.log(1 - r * l.balance / l.payment_monthly) / Math.log(1 + r) - 1e-9);
+  }
+  function loanBalance(l, m) {
+    const r = l.rate_pct / 100 / 12;
+    const g = Math.pow(1 + r, m);
+    const b = r ? l.balance * g - l.payment_monthly * (g - 1) / r : l.balance - l.payment_monthly * m;
+    return Math.max(0, b);
+  }
+  function loanInterest(l) {
+    const n = loanMonths(l);
+    if (!n) return 0;
+    const last = loanBalance(l, n - 1) * (1 + l.rate_pct / 100 / 12);
+    return l.payment_monthly * (n - 1) + last - l.balance;
+  }
+  function payoffT(d, x) {
+    return x.loan && x.loan.balance > 0 ? d.todayT + loanMonths(x.loan) / 12 : null;
+  }
+  function propertyValue(x, t, inf) {
+    if (x.life_years == null) return x.value * Math.pow(1 + x.change_pct / 100, t);
+    const left = x.life_years - x.age_years;
+    if (t <= left) return decline(x.value, x.end_value, left, t);
+    if (!x.replace) return x.end_value;
+    const start2 = left + Math.floor((t - left) / x.life_years) * x.life_years;
+    return decline(
+      replacePrice(x, start2, inf),
+      x.end_value * Math.pow(1 + inf / 100, start2),
+      x.life_years,
+      t - start2
+    );
+  }
+  function replacePrice(x, start2, inf) {
+    const cost = x.replace_cost ?? x.value;
+    const from = x.replace_in_todays_dollars ? 0 : (x.life_years ?? 0) - x.age_years;
+    return cost * Math.pow(1 + inf / 100, Math.max(0, start2 - from));
+  }
+  function propertyEquity(x, t, inf) {
+    const owed = x.loan ? loanBalance(x.loan, Math.round(t * 12)) : 0;
+    return propertyValue(x, t, inf) - owed;
+  }
+  function replaceYear(d, x) {
+    return x.life_years != null && x.replace ? Math.floor(d.todayT + x.life_years - x.age_years) : null;
+  }
+  function replaceMo(x, inf) {
+    if (x.life_years == null || !x.replace) return 0;
+    const left = x.life_years - x.age_years;
+    const cost = replacePrice(x, left, inf) / Math.pow(1 + inf / 100, left);
+    return Math.max(0, cost - x.end_value) / x.life_years / 12;
+  }
+  function annualComparableMo(d, st) {
+    const aside = new Set(d.props.map((x) => `Replace ${x.name}`));
+    return sum((st.annual ?? []).filter((a) => !aside.has(a.name)).map((a) => a.amt)) / 12;
+  }
+  function rentMo(d, st) {
+    return sum(d.props.map((x) => st.inc[`prop:${x.id}`] ?? 0));
+  }
+  function loanDrops(d, y) {
+    const out = {};
+    d.props.forEach((x) => {
+      const t = payoffT(d, x);
+      const cat = x.loan?.category;
+      if (t == null || !cat) return;
+      const share = Math.min(1, Math.max(0, y + 1 - t));
+      if (share) out[cat] = (out[cat] ?? 0) + x.loan.payment_monthly * share;
+    });
+    return out;
+  }
   function simulate(d, s, a = s.rs.age) {
     const key = JSON.stringify([s.st, s.cs, s.rs, s.fs.health, s.fs.tax, s.fs.kg, s.fs.rt, a]);
     let memo = SIM_CACHE.get(d);
@@ -487,20 +583,28 @@
     const start2 = d.todayMonth - 1;
     const n = (Math.max(d.todayYear + PROJECTION_YEARS, RY + 1) - d.todayYear) * 12 - start2;
     const mr = (pct) => Math.pow(1 + pct / 100, 1 / 12) - 1;
+    const plain = { stops: false, cap: null, to: null, fund: false, pre: false, emp: 0 };
     const accts = [
       ...d.children.map((c, k) => ({
+        ...plain,
         key: `529:${c.id}`,
         bal: c.college_529.balance,
         i: mr(cs[c.id]?.ret ?? 0),
-        until: d.timelines[k].months_to_graduation,
-        stops: false,
-        cap: null,
-        to: null,
-        fund: false
+        until: d.timelines[k].months_to_graduation
+      })),
+      ...d.accounts.map((x) => ({
+        ...plain,
+        key: x.key,
+        bal: rs.acct[x.key.slice(5)]?.bal ?? x.acct.balance,
+        i: mr(rs.ret),
+        pre: d.fromPay(x.key, st.sav[x.key]),
+        emp: x.acct.employer_monthly,
+        until: Math.round((partnerRetireAge(d, rs, x.partner, a) - x.partner.age) * 12)
       })),
       ...d.p.savings.map((sv) => {
         const to = overflowTarget(d, sv);
         return {
+          ...plain,
           key: `sav:${sv.id}`,
           bal: sv.balance,
           i: mr(sv.return_pct),
@@ -512,14 +616,12 @@
         };
       }),
       ...d.p.investments.map((v) => ({
+        ...plain,
         key: `inv:${v.id}`,
         bal: rs.inv[v.id]?.bal ?? v.balance,
         i: mr(rs.inv[v.id]?.ret ?? v.return_pct),
         until: Infinity,
-        stops: true,
-        cap: null,
-        to: null,
-        fund: false
+        stops: true
       }))
     ];
     const byKey = new Map(accts.map((x) => [x.key, x]));
@@ -530,6 +632,7 @@
     });
     const years = /* @__PURE__ */ new Map();
     let inv = null;
+    const acctParts = [];
     const flows = /* @__PURE__ */ new Map();
     const flowsAt = (y) => {
       let f = flows.get(y);
@@ -539,7 +642,11 @@
           snapshot("inv:");
           inv = investmentParts(d, s, base.yrs, snapshot("sav:"));
         }
-        const income = incomeFrom(d, s, { ...base, parts: [...base.parts, ...inv ?? []] }, y);
+        const income = incomeFrom(d, s, { ...base, parts: [
+          ...base.parts,
+          ...acctParts,
+          ...inv ?? []
+        ] }, y);
         f = { free: income - x.spend, emergency: x.emergency };
         flows.set(y, f);
       }
@@ -558,7 +665,13 @@
       const y = d.todayYear + Math.floor((start2 + m) / 12);
       const ret = y >= RY;
       accts.forEach((x) => {
-        if (x.key.startsWith("529:") && m === x.until) at[x.key] = x.bal;
+        if (m !== x.until) return;
+        if (x.key.startsWith("529:")) at[x.key] = x.bal;
+        if (x.key.startsWith("acct:")) {
+          at[x.key] = x.bal;
+          paid[x.key] = put[x.key];
+          acctParts.push(...accountParts(d, s, a, at, paid).filter((p) => `acct:${p.key}` === x.key));
+        }
       });
       if (m === invMonth) {
         snapshot("inv:");
@@ -572,11 +685,19 @@
         need -= take;
       });
       const active2 = accts.filter((x) => m < x.until && !(ret && x.stops));
-      const c = contributions(active2.map((x) => [x.key, st.sav[x.key]]), f.free - need);
+      const c = contributions(
+        active2.filter((x) => !x.pre).map((x) => [x.key, st.sav[x.key]]),
+        f.free - need
+      );
       accts.forEach((x) => x.bal *= 1 + x.i);
       let overflow = 0;
       let kept = 0;
       active2.forEach((x) => {
+        if (x.pre || x.emp) {
+          const v2 = (x.pre ? st.sav[x.key]?.amt ?? 0 : 0) + x.emp;
+          x.bal += v2;
+          put[x.key] += v2;
+        }
         let v = c.amt[x.key] ?? 0;
         if (x.cap != null) {
           const into = Math.max(0, Math.min(v, x.cap - x.bal));
@@ -679,11 +800,16 @@
       return d.partners.find((p) => p.id === pid)?.accounts[+i]?.name ?? key;
     };
     if (g === "st") {
-      if (k === "inc") return sub === "other" ? "Other income" : `${who(sub)} take-home`;
+      if (k === "inc") {
+        if (sub.startsWith("prop:")) {
+          return `Rent, ${d.props.find((x) => `prop:${x.id}` === sub)?.name ?? sub.slice(5)}`;
+        }
+        return sub === "other" ? "Other income" : `${who(sub)} take-home`;
+      }
       if (k === "sav") {
         const [type, id] = [sub.slice(0, sub.indexOf(":")), sub.slice(sub.indexOf(":") + 1)];
         const list = type === "inv" ? d.p.investments : d.p.savings;
-        const name = type === "529" ? `529, ${kid(id)}` : list.find((x) => x.id === id)?.name ?? id;
+        const name = type === "529" ? `529, ${kid(id)}` : type === "acct" ? accountName(id) : list.find((x) => x.id === id)?.name ?? id;
         const what = {
           mode: "contribution",
           amt: "per month",
@@ -801,14 +927,11 @@
     const rs = s.rs;
     const year = retireYear(d, rs, a);
     const yrs = Math.max(a - d.primary.age, ...d.partners.map((p) => partnerRetireAge(d, rs, p, a) - p.age));
-    const r = rs.ret / 100;
-    const real = (y) => Math.pow(1 + rs.inf / 100, y);
     const parts = [];
     const ages = {};
     const years = {};
     d.partners.forEach((p) => {
       const ageR = partnerRetireAge(d, rs, p, a);
-      const pYrs = ageR - p.age;
       ages[p.id] = ageR;
       years[p.id] = partnerRetireYear(d, rs, p, a);
       p.pensions.forEach((pn, i) => {
@@ -821,24 +944,10 @@
         }
         parts.push({ kind: "pension", key, name: pn.name, partner: p.id, value: v, started: true });
       });
-      p.accounts.forEach((ac, i) => {
-        const key = `${p.id}:${i}`;
-        const st = rs.acct[key];
-        if (!st?.on) return;
-        const bal = fv(st.bal, st.monthly, Math.round(pYrs * 12), r);
-        const w = drawPct(rs, `acct:${key}`) / 100 / 12;
-        parts.push({
-          kind: "account",
-          key,
-          name: ac.name,
-          partner: p.id,
-          value: bal / real(pYrs) * w,
-          balance: bal,
-          invested: st.bal + st.monthly * Math.round(pYrs * 12),
-          yrs: pYrs,
-          started: true
-        });
-      });
+    });
+    d.props.forEach((x) => {
+      const value = s.st.inc[`prop:${x.id}`] ?? 0;
+      if (value) parts.push({ kind: "rent", key: x.id, name: x.name, partner: "", value, started: true });
     });
     if (rs.ss) {
       d.partners.forEach((p) => {
@@ -861,6 +970,24 @@
       });
     }
     return { age: a, yrs, year, years, ages, parts };
+  }
+  function accountParts(d, s, a, bals, paid) {
+    const rs = s.rs;
+    return d.accounts.filter((x) => rs.acct[x.key.slice(5)]?.on && x.key in bals).map((x) => {
+      const yrs = partnerRetireAge(d, rs, x.partner, a) - x.partner.age;
+      const bal = bals[x.key];
+      return {
+        kind: "account",
+        key: x.key.slice(5),
+        name: x.acct.name,
+        partner: x.partner.id,
+        value: bal / Math.pow(1 + rs.inf / 100, yrs) * drawPct(rs, x.key) / 100 / 12,
+        balance: bal,
+        invested: paid[x.key],
+        yrs,
+        started: true
+      };
+    });
   }
   function investmentParts(d, s, yrs, bals, paid = {}) {
     const real = Math.pow(1 + s.rs.inf / 100, yrs);
@@ -890,8 +1017,8 @@
   function incomeFrom(d, s, R, y) {
     const { st, rs, fs } = s;
     const n = Math.max(0, y - d.todayYear);
-    const pay = sum(d.partners.filter((p) => y < R.years[p.id]).map((p) => (st.inc[p.id] ?? 0) * Math.pow(1 + (rs.raise[p.id] ?? 0) / 100, n))) + (y < R.year ? st.inc.other ?? 0 : 0);
-    const paid = sum(R.parts.filter((x) => x.kind === "investment" || x.kind === "savings" ? y >= R.year : y >= R.years[x.partner] && (x.kind !== "ss" || y >= (x.start ?? 0))).map((x) => x.value));
+    const pay = sum(d.partners.filter((p) => y < R.years[p.id]).map((p) => (st.inc[p.id] ?? 0) * Math.pow(1 + (rs.raise[p.id] ?? 0) / 100, n))) + (y < R.year ? (st.inc.other ?? 0) + rentMo(d, st) : 0);
+    const paid = sum(R.parts.filter((x) => ["investment", "savings", "rent"].includes(x.kind) ? y >= R.year : y >= R.years[x.partner] && (x.kind !== "ss" || y >= (x.start ?? 0))).map((x) => x.value));
     return pay + paid * (1 - fs.tax / 100);
   }
   function spendingAt(d, s, y, retYear) {
@@ -901,18 +1028,19 @@
     const kids = d.children.filter((_, k) => t < d.gradT(k)).length;
     const gone = total ? (total - kids) / total : 0;
     const ret = y >= retYear;
+    const drops = loanDrops(d, y);
     const cats = {};
     let living = 0;
     d.regular.forEach((i) => {
       const n = d.cats[i].name;
-      let v = (st.plan[n] ?? 0) * Math.max(0, 1 + gone * (fs.kg[n] ?? 0) / 100);
+      let v = Math.max(0, (st.plan[n] ?? 0) - (drops[n] ?? 0)) * Math.max(0, 1 + gone * (fs.kg[n] ?? 0) / 100);
       if (ret) v *= Math.max(0, 1 + (fs.rt[n] ?? 0) / 100);
       cats[n] = v;
       living += v;
     });
     const em = emergencyMo(d, st);
     living += -creditsMo(d, st, ret) + (d.funds.length ? 0 : em);
-    const annual = annualMo(st);
+    const annual = annualMo(st) - sum((st.annual ?? []).filter((a) => drops[a.name]).map((a) => Math.min(a.amt / 12, drops[a.name])));
     const health = ret ? fs.health : 0;
     return {
       y,
@@ -925,6 +1053,10 @@
       emergency: d.funds.length ? em : 0,
       spend: living + annual + health
     };
+  }
+  function decline(from, to, span2, x) {
+    if (span2 <= 0) return to;
+    return to > 0 && from > 0 ? from * Math.pow(to / from, x / span2) : from + (to - from) * x / span2;
   }
 
   // src/app.ts
@@ -989,6 +1121,52 @@
       send("PUT", "/api/state/ui", { S: app.S, base: app.defs }).catch(() => {
       });
     }, SAVE_DELAY_MS);
+  }
+
+  // src/ui/folds.ts
+  function buildFolds(side, allBtn, key) {
+    const panels = [...side.querySelectorAll(".panel")];
+    let folded = /* @__PURE__ */ new Set();
+    try {
+      folded = new Set(JSON.parse(localStorage.getItem(key) ?? "[]"));
+    } catch {
+    }
+    const keyOf = (el) => el.querySelector("h3")?.textContent?.trim() ?? "";
+    const store = () => {
+      try {
+        localStorage.setItem(key, JSON.stringify([...folded]));
+      } catch {
+      }
+    };
+    const set = (el, on2) => {
+      el.classList.toggle("folded", on2);
+      const b = el.querySelector(":scope > .fold");
+      b.setAttribute("aria-expanded", String(!on2));
+      b.textContent = on2 ? "\u25B8" : "\u25BE";
+      if (on2) folded.add(keyOf(el));
+      else folded.delete(keyOf(el));
+    };
+    const markAll = () => {
+      allBtn.textContent = panels.every((p) => p.classList.contains("folded")) ? "Expand Settings" : "Collapse Settings";
+    };
+    panels.forEach((el) => {
+      el.classList.add("foldable");
+      el.insertAdjacentHTML("afterbegin", `<button class="fold" type="button" aria-expanded="true"
+      aria-label="Show or hide ${esc(keyOf(el))}">\u25BE</button>`);
+      set(el, folded.has(keyOf(el)));
+      el.querySelector(":scope > .fold").addEventListener("click", () => {
+        set(el, !el.classList.contains("folded"));
+        store();
+        markAll();
+      });
+    });
+    allBtn.addEventListener("click", () => {
+      const fold = allBtn.textContent === "Collapse Settings";
+      panels.forEach((el) => set(el, fold));
+      store();
+      markAll();
+    });
+    markAll();
   }
 
   // src/ui/categorize.ts
@@ -1423,13 +1601,14 @@
       on: on2 ?? Object.fromEntries(Object.keys(st.on).map((k) => [k, true]))
     };
   }
-  function outgo(b) {
-    return b.spend + b.annual;
+  function outgo(st) {
+    return budget(app.d, st).spend + annualComparableMo(app.d, st);
   }
   function row(b, cls, extra) {
     const d = app.d;
     const parts = [];
     if (d.children.length) parts.push("529s");
+    if (d.accounts.some((a) => !a.acct.pre_tax)) parts.push("retirement");
     d.p.savings.forEach((s) => parts.push(s.name));
     if (b.investing) parts.push("investing");
     const tile = (label2, v, note, more = "") => `<div${more}><span
@@ -1438,7 +1617,7 @@
       "Take-home income",
       fmt(b.income),
       `${esc(d.partners.map((x) => x.name).join(" + ") || "Household")}, net`
-    ) + tile("Spending", fmt(b.spend), b.credits ? `after ${fmt(b.credits)} of credits` : "regular categories") + tile("Savings", fmt(b.savings + b.investing), esc(parts.join(" + ") || "none set")) + tile("Annual expenses", fmt(b.annual), `${fmt(b.annual * 12)}/yr`) + tile(
+    ) + tile("Spending", fmt(b.spend), b.credits ? `after ${fmt(b.credits)} of credits` : "regular categories") + tile("Savings", fmt(b.savings + b.investing), esc(parts.join(" + ") || "none set") + (b.pretax ? ` \xB7 plus ${fmt(b.pretax)} pre-tax from pay` : "")) + tile("Annual expenses", fmt(b.annual), `${fmt(b.annual * 12)}/yr`) + tile(
       "Left over each month",
       `<span class="${b.left < 0 ? "neg" : "pos"}">${fmt(b.left)}</span>`,
       `${b.left < 0 ? "short " : ""}${fmt(Math.abs(b.left) * 12)} over a year`,
@@ -1446,8 +1625,8 @@
     ) + extra + "</div>";
   }
   function vsTile(st, head, plan = false) {
-    const p = outgo(budget(app.d, st));
-    const diff = outgo(budget(app.d, actualSt(st.on))) - p;
+    const p = outgo(st);
+    const diff = outgo(actualSt(st.on)) - p;
     const pct = p ? Math.round(Math.abs(diff) / p * 100) : 0;
     const same2 = Math.abs(diff) < 0.5;
     const word = same2 ? "right on" : diff > 0 ? "over" : "under";
@@ -1749,7 +1928,7 @@
       const spent = series(counted);
       const cred = series(credCount);
       const planCred = credCount.filter((c) => d.isPlannerCredit(c));
-      const plan = st ? (planSum(d.regular) ?? 0) + annualMo(st) - (planSum(planCred) ?? 0) : null;
+      const plan = st ? (planSum(d.regular) ?? 0) + annualComparableMo(d, st) - (planSum(planCred) ?? 0) : null;
       const like = series(counted.filter((c) => ["spending", "annual"].includes(d.cats[c].kind)));
       const likeCred = series(planCred);
       h += totalRow(
@@ -1858,7 +2037,7 @@
     const avg = cols.length ? sum(cols.map((c) => colValue(c, avgOf))) / cols.length : 0;
     const avgName = selCat === null && mode !== "cred" ? "Avg regular" : "Avg";
     const st = attached();
-    const monthly = !st ? null : selCat !== null ? planned(st, selCat) : mode === "cred" ? sum(credCats.map((c) => planned(st, c) ?? 0)) : sum(d.regular.map((c) => planned(st, c) ?? 0)) + annualMo(st);
+    const monthly = !st ? null : selCat !== null ? planned(st, selCat) : mode === "cred" ? sum(credCats.map((c) => planned(st, c) ?? 0)) : sum(d.regular.map((c) => planned(st, c) ?? 0)) + annualComparableMo(d, st);
     const days = dayMonth !== null ? cols.length : 1;
     const bud = monthly === null ? null : monthly / days;
     leg += `<span><i class="ln"></i>${avgName} ${fmt(avg)}/${unit}</span>` + (bud === null ? "" : `<span><i class="ln bud"></i>Budget ${fmt(bud)}/${unit}</span>`) + (view === "typical" && dayMonth === null ? "<span>\u2502 lowest \u2013 highest year</span>" : "");
@@ -2052,6 +2231,7 @@
     $("planner-sub").textContent = `Planned / mo starts at each category's ${d.n}-month average. Type a new number to try a change, and save it as a budget.`;
     buildTable2();
     buildSide();
+    buildFolds($("p-side"), $("p-fold-all"), "fp-budget-folded");
     $("cmp-sel").addEventListener("change", () => {
       cmpKey = $("cmp-sel").value;
       update();
@@ -2157,6 +2337,7 @@
     const d = app.d;
     return [
       ...d.children.map((c) => [`529:${c.id}`, `529, ${c.name}`]),
+      ...d.accounts.map((a) => [a.key, a.acct.pre_tax ? `${a.acct.name} (pre-tax)` : a.acct.name]),
       ...d.p.savings.map((s) => [`sav:${s.id}`, s.name]),
       ...d.p.investments.map((v) => [`inv:${v.id}`, v.name])
     ];
@@ -2175,11 +2356,12 @@
     const row2 = (key, attr, label2, note = "") => `<div class="row"><label for="${attr}-${esc(key)}">${esc(label2)}${note ? ` <span class="small muted">\xB7 ${esc(note)}</span>` : ""}</label><input class="amt"
         id="${attr}-${esc(key)}" data-${attr}="${esc(key)}" type="number" step="50"
         inputmode="decimal"></div>`;
-    $("inc-rows").innerHTML = d.partners.map((x) => row2(x.id, "inc", x.name, x.take_home_note)).join("") + row2("other", "inc", "Other income");
+    $("inc-rows").innerHTML = d.partners.map((x) => row2(x.id, "inc", x.name, x.take_home_note)).join("") + row2("other", "inc", "Other income") + d.props.filter((x) => x.rent_monthly || x.type === "rental").map((x) => row2(`prop:${x.id}`, "inc", `Rent, ${x.name}`, "after its costs")).join("");
     const kind = { stocks: "stocks", bonds: "bonds", savings: "savings", emergency: "emergency fund" };
-    $("sav-rows").innerHTML = d.children.map((c) => savRow(`529:${c.id}`, `529, ${c.name}`)).join("") + p.savings.map((s) => savRow(`sav:${s.id}`, s.name, kind[s.type])).join("") + p.investments.map((v) => savRow(`inv:${v.id}`, v.name, kind[v.type])).join("");
+    $("sav-rows").innerHTML = d.children.map((c) => savRow(`529:${c.id}`, `529, ${c.name}`)).join("") + d.accounts.map((a) => savRow(a.key, a.acct.name, `${a.partner.name} \xB7 ${a.acct.pre_tax ? "pre-tax" : "post-tax"}`)).join("") + p.savings.map((s) => savRow(`sav:${s.id}`, s.name, kind[s.type])).join("") + p.investments.map((v) => savRow(`inv:${v.id}`, v.name, kind[v.type])).join("");
     $("sav-note").textContent = [
       d.children.length ? "529 contributions stop at each child's high school graduation." : "",
+      d.accounts.length ? "Retirement accounts stop when their partner retires. A pre-tax one on $/mo comes out of pay before take-home, so it doesn't change what's left over." : "",
       p.investments.length ? "Investments are added to their balance in Retirement and stop at retirement." : "",
       'Fixed amounts come off first; "% left" takes a share of what is left after spending, annual expenses and the fixed amounts; "rest" splits whatever is still left evenly.'
     ].filter(Boolean).join(" ");
@@ -2317,7 +2499,12 @@
     sumLine("an", bp.annual, bc.annual, false);
     sumLine("em", bp.emergency, bc.emergency, false);
     $("em-how").textContent = fund ? "(paid from the fund, not in the total)" : "";
-    savLabels().forEach(([k]) => sumLine(k.replace(":", "-"), bp.amt[k] ?? 0, bc.amt[k] ?? 0, true));
+    savLabels().forEach(([k, label2]) => {
+      const id = k.replace(":", "-");
+      sumLine(id, bp.amt[k] ?? 0, bc.amt[k] ?? 0, true);
+      const cell2 = $(`sp-${id}`).previousElementSibling;
+      cell2.textContent = d.fromPay(k, st.sav[k]) ? `${label2}, from pay (not in the total)` : label2;
+    });
     const total = (b) => b.spend + b.annual + b.savings + b.investing;
     sumLine("tot", total(bp), total(bc), false);
     $("an-total").textContent = `${fmt(sum(st.annual.map((a) => a.amt)))}/yr \xB7 ${fmt(bp.annual)}/mo`;
@@ -2356,6 +2543,11 @@
       el.querySelector("[data-out]").textContent = `= ${fmt(b.amt[key] ?? 0)}/mo`;
       el.querySelector("[data-rest]").textContent = `${fmt(b.amt[key] ?? 0)}/mo`;
       const note = [];
+      const ac = d.accounts.find((x) => x.key === key)?.acct;
+      if (ac?.pre_tax) {
+        note.push(line.mode === "fixed" ? "from pay, before take-home" : "from the left-over, like the other lines");
+      }
+      if (ac?.employer_monthly) note.push(`+ ${fmt(ac.employer_monthly)}/mo from the employer`);
       const sv = d.p.savings.find((x) => `sav:${x.id}` === key);
       if (sv) {
         note.push(`${fmt(sv.balance)} today${sv.max_balance != null ? ` of ${fmt(sv.max_balance)} max` : ""}`);
@@ -2907,6 +3099,7 @@
     ["h-planner", "Budgeting"],
     ["h-cat", "Categorizing"],
     ["h-college", "College 529s"],
+    ["h-prop", "Property"],
     ["h-retire", "Retirement"],
     ["h-future", "Spending over time"],
     ["h-scen", "Sharing"],
@@ -2998,13 +3191,18 @@
   <li><b>Savings</b>: each 529, savings account, emergency fund and investment adds a fixed
     <b>$/mo</b>, <b>% left</b> (a share of what is left after spending, annual expenses and the
     fixed amounts, kept between an optional min and max) or <b>rest</b> (whatever is still left,
-    split evenly between every "rest" line). A savings account with a max balance sends the rest
+    split evenly between every "rest" line). Retirement accounts can use all three too. A
+    <i>pre-tax</i> one on $/mo comes out of pay before take-home, so it doesn't change the
+    left-over; on % left or rest, or a <i>post-tax</i> one, it works like any other line. An
+    employer match is added on top. A savings account with a max balance sends the rest
     to an investment once it's full; the note under it says when.</li>
   <li><b>Annual expenses</b>: add as many as you like (+ Add, a name and a yearly amount; \xD7 to
     remove). Their total \xF7 12 counts each month.</li>
   <li><b>Emergency fund costs</b>: what you expect to take out of the emergency fund each month.
     Empty means the same as what goes in, so the fund holds steady; more makes it shrink, less
     makes it grow. With no emergency fund it counts as spending.</li>
+  <li><b>The cards on the right</b> (income, savings, annual expenses, emergency costs) fold with
+    \u25BE / \u25B8; <i>Collapse Settings</i> in the Budgets bar folds them all.</li>
   <li><i>Fill from Spending</i> sets Planned / mo to the averages of the period shown in Spending.
     <i>Try 10% less on flexible spending</i> trims the categories marked flexible.</li>
 </ul>
@@ -3030,6 +3228,22 @@
 <p><b>Presets</b>: click one to set both sliders. <i>Edit presets</i> lets you change any label,
   return or inflation, add or remove presets (the starting ones too) or keep none. The list is
   shared by every card and saved with the plan.</p>
+
+<h3 id="h-prop">Property</h3>
+<ul>
+  <li>Set up homes, cars and rentals in <i>Settings \u203A Property</i>. Each gets a card with what it's
+    worth, what's owed and the equity (worth minus owed) by year, in dollars of each year.</li>
+  <li><b>Loans</b>: from the balance, rate and payment you get the payoff date and the interest
+    still to pay. Pick the category the payment shows up in, and Spending over time and Retirement
+    drop it from there once it's paid off.</li>
+  <li><b>A lifetime</b> (a car): its value goes down to the end value. If it's replaced, the
+    replacement cost is either today's price (grows with inflation) or the actual price then, and
+    Budgeting gets a <i>Replace \u2026</i> annual expense, (replacement cost in today's dollars \u2212 end
+    value) \xF7 lifetime a year, to set the money aside.</li>
+  <li><b>Rent</b> from a rental is an income line in Budgeting; it continues after retiring (taxed
+    like other retirement income) and shows in the Retirement chart.</li>
+  <li>The totals show equity today and at retirement; Retirement shows the same figure.</li>
+</ul>
 
 <h3 id="h-retire">Retirement</h3>
 <ul>
@@ -3093,9 +3307,137 @@
     });
   }
 
+  // src/ui/property.ts
+  var TYPES = {
+    home: "Home",
+    car: "Car",
+    rental: "Rental",
+    other: "Other"
+  };
+  var MONTHS = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec"
+  ];
+  function buildProperty() {
+    const d = app.d;
+    $("property").hidden = !d.props.length;
+    $("nav-property").hidden = !d.props.length;
+    $("props").innerHTML = d.props.map((x) => `<div class="panel kid" id="pr-${esc(x.id)}">
+      <div><h3>${esc(x.name)}</h3><p class="small muted">${TYPES[x.type]}${x.life_years != null ? ` \xB7 ${x.age_years} of ${x.life_years} years old` : ""}${x.loan && x.loan.balance > 0 ? ` \xB7 loan at ${x.loan.rate_pct}%` : ""}</p></div>
+      <svg class="chart" id="prc-${esc(x.id)}" viewBox="0 0 480 220" role="img"
+        aria-label="${esc(x.name)}: value, loan and equity by year"></svg>
+      <div class="legend small"><span><i class="sw" style="background:var(--accent);height:3px;border-radius:0"></i>Value</span>${x.loan && x.loan.balance > 0 ? '<span><i class="sw" style="background:var(--neg);height:3px;border-radius:0"></i>Owed</span><span><i class="sw" style="background:var(--ink);height:3px;border-radius:0"></i>Equity</span>' : ""}</div>
+      <div class="out" id="pro-${esc(x.id)}"></div>
+    </div>`).join("");
+    onChange(updateProperty);
+    updateProperty();
+  }
+  function updateProperty() {
+    const d = app.d;
+    if (!d.props.length) return;
+    const S = app.S;
+    const inf = S.rs.inf;
+    const RY = retireYear(d, S.rs);
+    const tR = Math.max(0, RY - d.todayT);
+    const owed = sum(d.props.map((x) => x.loan?.balance ?? 0));
+    const eqNow = sum(d.props.map((x) => propertyEquity(x, 0, inf)));
+    const eqR = sum(d.props.map((x) => propertyEquity(x, tR, inf)));
+    $("pr-totals").innerHTML = `<div><span class="eyebrow">Equity today</span><span class="v num">${fmt(eqNow)}</span><span class="small muted">worth ${fmt(eqNow + owed)} \xB7 owed ${fmt(owed)}</span></div><div><span class="eyebrow">Equity at retirement</span><span
+    class="v num">${fmt(eqR)}</span><span class="small muted">in ${RY - 1} dollars \xB7 ${fmt(eqR / Math.pow(1 + inf / 100, tR))} in today's dollars</span></div>`;
+    d.props.forEach((x) => {
+      drawChart2(x, RY);
+      const rows = [["Worth today", fmt(x.value)]];
+      const l = x.loan;
+      if (l && l.balance > 0) {
+        const t = payoffT(d, x);
+        const n = loanMonths(l);
+        rows.push(
+          ["Owed today", fmt(l.balance)],
+          ["Equity today", fmt(x.value - l.balance)],
+          ["Payment", `${fmt(l.payment_monthly)}/mo`],
+          ["Paid off", `${MONTHS[Math.round(t % 1 * 12) % 12]} ${Math.floor(t + 1e-9)} \xB7 ${yearsText(n / 12)}`],
+          ["Interest still to pay", fmt(loanInterest(l))]
+        );
+        if (l.category) {
+          rows.push(["", `<span class="small muted">From then on the projections drop ${fmt(l.payment_monthly)}/mo from ${esc(l.category)}.</span>`]);
+        }
+      }
+      const ry = replaceYear(d, x);
+      if (ry != null) {
+        const item = S.st.annual.find((a) => a.name === `Replace ${x.name}`);
+        const left = x.life_years - x.age_years;
+        rows.push(
+          ["Replaced", `${ry}, then every ${yearsText(x.life_years)}`],
+          [`Costs then (${ry} dollars)`, fmt(replacePrice(x, left, S.rs.inf))],
+          ["Set aside to replace", `${fmt(item ? item.amt / 12 : replaceMo(x, S.rs.inf))}/mo`]
+        );
+        rows.push(["", `<span class="small muted">${item ? 'In Budgeting \u203A Annual expenses as "' + esc(item.name) + '".' : `Not in this budget's annual expenses: add "Replace ` + esc(x.name) + '" there to count it.'}</span>`]);
+      }
+      const rent = S.st.inc[`prop:${x.id}`];
+      if (rent != null) rows.push(["Rent, after its costs", `${fmt(rent)}/mo, in income`]);
+      rows.push(["Equity at retirement", fmt(propertyEquity(x, tR, inf))]);
+      $(`pro-${x.id}`).innerHTML = rows.map(([k, v]) => k ? `<span>${k}</span><span class="num">${v}</span>` : `<span style="grid-column:1/-1">${v}</span>`).join("");
+    });
+  }
+  function drawChart2(x, RY) {
+    const d = app.d;
+    const inf = app.S.rs.inf;
+    const W = 480;
+    const H = 220;
+    const L = 48;
+    const R = 8;
+    const T = 26;
+    const B = 22;
+    const pw = W - L - R;
+    const ph = H - T - B;
+    const span2 = Math.min(PROJECTION_YEARS, Math.max(20, RY - d.todayYear + 5));
+    const ts = Array.from({ length: span2 * 4 + 1 }, (_, i) => i / 4);
+    const val = ts.map((t) => propertyValue(x, t, inf));
+    const owe = ts.map((t) => x.loan ? loanBalance(x.loan, Math.round(t * 12)) : 0);
+    const max = Math.max(...val, ...owe, 1);
+    const step = niceStep(max);
+    const top = Math.ceil(max / step) * step;
+    const px = (t) => L + t / span2 * pw;
+    const py = (v) => T + ph - Math.max(0, v) / top * ph;
+    let g = "";
+    for (let v = 0; v <= top + 1e-6; v += step) {
+      g += `<line class="grid" x1="${L}" x2="${W - R}" y1="${py(v)}" y2="${py(v)}"/><text x="${L - 6}" y="${py(v) + 4}" text-anchor="end">${fk(v)}</text>`;
+    }
+    for (let t = 0; t <= span2; t += 5) {
+      g += `<text x="${px(t)}" y="${H - 6}" text-anchor="middle">${d.todayYear + t}</text>`;
+    }
+    const marks2 = [[RY - d.todayT, `Retire ${RY}`]];
+    const off = payoffT(d, x);
+    if (off != null) marks2.push([off - d.todayT, `Paid off ${Math.floor(off + 1e-9)}`]);
+    marks2.filter(([t]) => t > 0 && t <= span2).forEach(([t, lbl], j) => {
+      g += `<line x1="${px(t)}" x2="${px(t)}" y1="${T - 4}" y2="${T + ph}" style="stroke:var(--ink3);stroke-width:1;stroke-dasharray:3 3"/><text x="${px(t) + 3}" y="${10 + j * 12}" style="fill:var(--ink)">${esc(lbl)}</text>`;
+    });
+    const line = (vs, col, w = 2) => `<path d="${vs.map((v, i) => `${i ? "L" : "M"}${px(ts[i]).toFixed(1)},${py(v).toFixed(1)}`).join("")}" style="fill:none;stroke:var(${col});stroke-width:${w};stroke-linejoin:round"/>`;
+    g += line(val, "--accent");
+    if (x.loan && x.loan.balance > 0) {
+      g += line(owe, "--neg") + line(val.map((v, i) => v - owe[i]), "--ink", 2.5);
+    }
+    $(`prc-${x.id}`).innerHTML = g;
+  }
+  function yearsText(y) {
+    const m = Math.round(y * 12);
+    const yr = Math.floor(m / 12);
+    const mo = m % 12;
+    return `${yr} year${yr === 1 ? "" : "s"}${mo ? `, ${mo} month${mo === 1 ? "" : "s"}` : ""}`;
+  }
+
   // src/ui/retire.ts
   var TABLE_AGES = [55, 58, 60, 62, 65, 67, 70];
-  var FOLD_KEY = "fp-retire-folded";
   function buildRetire() {
     const d = app.d;
     const p = d.primary;
@@ -3109,7 +3451,7 @@
     buildOthers();
     buildPanels();
     buildAssumptions();
-    buildFolds();
+    buildFolds($("r-side"), $("r-fold-all"), "fp-retire-folded");
     ra.addEventListener("input", () => {
       app.S.rs.age = +ra.value;
       changed();
@@ -3198,6 +3540,7 @@
     if (x.kind === "pension") return "--r1";
     if (x.kind === "investment") return "--r5";
     if (x.kind === "savings") return "--onetime";
+    if (x.kind === "rent") return "--avg";
     if (x.kind === "ss") return "--r4";
     return x.partner === app.d.primary.id ? "--r2" : "--r3";
   }
@@ -3241,8 +3584,8 @@
       p.accounts.forEach((ac, i) => {
         const key = `${p.id}:${i}`;
         h += `<div class="panel" data-pane="acct|${esc(key)}|on"><label class="toggle"><input
-        type="checkbox" data-r="acct|${esc(key)}|on"><h3>${esc(ac.name)} <span class="small muted">${esc(p.name)}</span></h3></label>${numInput(`acct|${key}|bal`, "Balance today", 1e3, true)}${numInput(`acct|${key}|monthly`, "Adding per month")}${drawCtl(`acct:${key}`)}<p
-        class="small muted">Grows at the return rate; contributions continue until retirement.</p></div>`;
+        type="checkbox" data-r="acct|${esc(key)}|on"><h3>${esc(ac.name)} <span class="small muted">${esc(p.name)}</span></h3></label>${numInput(`acct|${key}|bal`, "Balance today", 1e3, true)}
+        <div class="row"><span>Adding per month</span><span><span class="num" id="r-ac-${esc(key)}"></span> <a class="small" href="#budget">set in Budgeting</a></span></div>${drawCtl(`acct:${key}`)}<p class="small muted">${ac.pre_tax ? "Pre-tax, from pay" : "Post-tax, from take-home"}. Grows at the return rate; contributions stop when ${esc(p.name)} retires.</p></div>`;
       });
     });
     d.p.investments.forEach((v) => {
@@ -3283,52 +3626,6 @@
         changed();
       });
     });
-  }
-  function buildFolds() {
-    const side = $("r-side");
-    const panels = [...side.querySelectorAll(".panel")];
-    let folded = /* @__PURE__ */ new Set();
-    try {
-      folded = new Set(JSON.parse(localStorage.getItem(FOLD_KEY) ?? "[]"));
-    } catch {
-    }
-    const keyOf = (el) => el.querySelector("h3")?.textContent?.trim() ?? "";
-    const store = () => {
-      try {
-        localStorage.setItem(FOLD_KEY, JSON.stringify([...folded]));
-      } catch {
-      }
-    };
-    const set = (el, on2) => {
-      el.classList.toggle("folded", on2);
-      const b = el.querySelector(":scope > .fold");
-      b.setAttribute("aria-expanded", String(!on2));
-      b.textContent = on2 ? "\u25B8" : "\u25BE";
-      if (on2) folded.add(keyOf(el));
-      else folded.delete(keyOf(el));
-    };
-    const allBtn = $("r-fold-all");
-    const markAll = () => {
-      allBtn.textContent = panels.every((p) => p.classList.contains("folded")) ? "Expand Settings" : "Collapse Settings";
-    };
-    panels.forEach((el) => {
-      el.classList.add("foldable");
-      el.insertAdjacentHTML("afterbegin", `<button class="fold" type="button" aria-expanded="true"
-      aria-label="Show or hide ${esc(keyOf(el))}">\u25BE</button>`);
-      set(el, folded.has(keyOf(el)));
-      el.querySelector(":scope > .fold").addEventListener("click", () => {
-        set(el, !el.classList.contains("folded"));
-        store();
-        markAll();
-      });
-    });
-    allBtn.addEventListener("click", () => {
-      const fold = allBtn.textContent === "Collapse Settings";
-      panels.forEach((el) => set(el, fold));
-      store();
-      markAll();
-    });
-    markAll();
   }
   function buildAssumptions() {
     const d = app.d;
@@ -3377,16 +3674,23 @@
     });
     markPreset();
     const tot = retirementSavings(d, S);
+    const RY = retireYear(d, rs);
+    const eqR = sum(d.props.map((x) => propertyEquity(x, Math.max(0, RY - d.todayT), rs.inf)));
     $("r-totals").innerHTML = `<div><span class="eyebrow">Put in by retirement</span><span
     class="v num">${fmt(tot.invested)}</span><span class="small muted">balances today plus every
     contribution until ${tot.year - 1}</span></div><div><span class="eyebrow">Estimated total at
     retirement</span><span class="v num">${fmt(tot.total)}</span><span class="small muted">with
-    returns, in ${tot.year - 1} dollars \xB7 ${fmt(tot.today)} in today's dollars</span></div>`;
+    returns, in ${tot.year - 1} dollars \xB7 ${fmt(tot.today)} in today's dollars</span></div>` + (d.props.length ? `<div><span class="eyebrow">Property equity at retirement</span><span
+        class="v num">${fmt(eqR)}</span><span class="small muted">value minus loans, in ${RY - 1} dollars \xB7 <a href="#property">Property</a></span></div>` : "");
     document.querySelectorAll("[data-drawv]").forEach((el) => {
       const key = el.dataset.drawv;
       el.textContent = `${drawPct(rs, key)}%`;
       const r = document.querySelector(`[data-r="draw|${CSS.escape(key)}"]`);
       if (r && document.activeElement !== r) r.value = String(drawPct(rs, key));
+    });
+    d.accounts.forEach((x) => {
+      const own = budget(d, S.st).amt[x.key] ?? 0;
+      $(`r-ac-${x.key.slice(5)}`).textContent = fmt(own) + (x.acct.employer_monthly ? ` + ${fmt(x.acct.employer_monthly)} employer` : "");
     });
     retireSavings(d).forEach((sv) => {
       $(`r-sc-${sv.id}`).textContent = fmt(budget(d, S.st).amt[`sav:${sv.id}`] ?? 0);
@@ -3433,14 +3737,14 @@
         class="num">${fmt(sp)}/mo</span>` + gapRow(R.later > 0 ? "Gap at retirement" : "Gap each month", R.total * net) + (R.later > 0 ? gapRow(`Gap from ${R.fullYear} on`, R.full * net) : "");
     const kinds = [];
     R.parts.forEach((x) => {
-      const lbl = x.kind === "pension" ? "Pensions" : x.kind === "investment" ? "Investments" : x.kind === "savings" ? "Savings" : x.kind === "ss" ? "Social Security" : x.partner === d.primary.id ? `${d.primary.name}'s accounts` : "Other accounts";
+      const lbl = x.kind === "pension" ? "Pensions" : x.kind === "investment" ? "Investments" : x.kind === "savings" ? "Savings" : x.kind === "rent" ? "Rent" : x.kind === "ss" ? "Social Security" : x.partner === d.primary.id ? `${d.primary.name}'s accounts` : "Other accounts";
       if (!kinds.some(([l]) => l === lbl)) kinds.push([lbl, partColor(x)]);
     });
     $("r-legend").innerHTML = kinds.map(([l, c]) => `<span><i class="sw" style="background:var(${c})"></i>${esc(l)}</span>`).join("") + `<span><i class="sw" style="border:2px solid var(--r4);background:transparent"></i>Social Security starting later</span><span><i class="ln proj"></i>Projected retirement spending</span><span><i class="ln today"></i>Spending today</span>`;
-    drawChart2(today);
+    drawChart3(today);
     drawTable();
   }
-  function drawChart2(today) {
+  function drawChart3(today) {
     const { d, S } = app;
     const net = 1 - S.fs.tax / 100;
     const ages = [];
@@ -3465,7 +3769,7 @@
     for (let v = 0; v <= top + 1e-6; v += step) {
       g += `<line class="grid" x1="${L}" x2="${W - Rr}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${fk(v)}</text>`;
     }
-    const order = ["pension", "account", "investment", "savings", "ss"];
+    const order = ["pension", "account", "investment", "savings", "rent", "ss"];
     ages.forEach((x, i) => {
       const bx = L + i * bw + bw * 0.16;
       const w = bw * 0.68;
@@ -3510,12 +3814,13 @@
     const ages = TABLE_AGES.filter((a) => a >= lo && a <= hi);
     if (!ages.includes(S.rs.age)) ages.push(S.rs.age);
     ages.sort((a, b) => a - b);
-    const kinds = ["pension", "account", "investment", "savings", "ss"].filter((k) => retirementIncome(d, S, S.rs.age).parts.some((p) => p.kind === k));
+    const kinds = ["pension", "account", "investment", "savings", "rent", "ss"].filter((k) => retirementIncome(d, S, S.rs.age).parts.some((p) => p.kind === k));
     const names = {
       pension: "Pensions",
       account: "Accounts",
       investment: "Investments",
       savings: "Savings",
+      rent: "Rent",
       ss: "Soc. Sec."
     };
     $("rtable").innerHTML = `<tr>${d.partners.map((p) => `<th>${esc(p.name)}</th>`).join("")}<th>Year</th>${kinds.map((k) => `<th>${names[k]}</th>`).join("")}<th>After tax</th><th>Once SS starts</th><th>Projected spending</th><th>vs spending, long run</th></tr>` + ages.map((a) => {
@@ -3536,6 +3841,7 @@
   var TABS = [
     ["household", "Household"],
     ["money", "Savings & income"],
+    ["property", "Property"],
     ["assumptions", "Assumptions"],
     ["sources", "Data sources"],
     ["categories", "Categories"],
@@ -3594,6 +3900,7 @@
     const render2 = {
       household: renderHousehold,
       money: renderMoney,
+      property: renderProperty,
       assumptions: renderAssumptions,
       sources: renderSources,
       categories: renderCategories,
@@ -3789,7 +4096,13 @@
       "number",
       "optional: grows the benefit after the last age"
     );
-    const accountRow = (r = {}) => input("name", "Account", r.name ?? "401(k)") + input("balance", "Balance today", r.balance ?? 0, "number") + input("monthly", "Added per month", r.monthly ?? 0, "number");
+    const accountRow = (r = {}) => input("name", "Account", r.name ?? "401(k)") + input("balance", "Balance today", r.balance ?? 0, "number") + check("pre_tax", "Pre-tax", r.pre_tax ?? true) + contribFields(r, "", "Your contribution") + input(
+      "employer_monthly",
+      "Employer adds per month",
+      r.employer_monthly ?? 0,
+      "number",
+      "A match, on top"
+    );
     const html = `<div class="fgrid">
       ${input("name", "Name", p.name, "text", "A generic name is safest, e.g. Partner A")}
       ${input("age", "Age", p.age, "number")}
@@ -3840,7 +4153,12 @@
           if (r.service_years_now !== void 0) out.service_years_now = r.service_years_now;
           return out;
         }),
-        accounts: readRows(form, "accounts")
+        accounts: readRows(form, "accounts").map((r) => {
+          const out = contribOut(r);
+          if (!out.employer_monthly) delete out.employer_monthly;
+          if (out.pre_tax) delete out.pre_tax;
+          return out;
+        })
       };
       if (!top.take_home_note) delete next.take_home_note;
       if (top.retirement_age === void 0 || top.retirement_age === "") delete next.retirement_age;
@@ -3959,6 +4277,111 @@
           const out = contribOut(r);
           if (!out.overflow_to || out.max_balance === void 0) delete out.overflow_to;
           return out;
+        })));
+        report(msg);
+      } catch (err) {
+        report(msg, err);
+      }
+    });
+  }
+  function renderProperty(el) {
+    const props = section("properties", []);
+    const cats = section("categories", []).filter((c) => ["spending", "annual"].includes(String(c.kind ?? "spending")));
+    const catOpts = [
+      ["", "None"],
+      ...cats.map((c) => [String(c.name), String(c.name)])
+    ];
+    const row2 = (r = {}) => {
+      const loan = r.loan ?? {};
+      const head = (t, note) => `<span class="item-head"><b>${t}</b> ${note}</span>`;
+      return input("name", "Name", r.name ?? "Home") + select("type", "Type", [
+        ["home", "Home"],
+        ["car", "Car"],
+        ["rental", "Rental"],
+        ["other", "Other"]
+      ], r.type ?? "home") + input("value", "Worth today", r.value ?? 0, "number") + input(
+        "change_pct",
+        "Yearly change in value (%)",
+        r.change_pct ?? 0,
+        "number",
+        "e.g. 3 for a home; negative loses value. Not used with a lifetime"
+      ) + head("Loan", "optional: mortgage or car loan") + input(
+        "loan.balance",
+        "Owed today",
+        loan.balance ?? "",
+        "number",
+        "Empty: no loan"
+      ) + input("loan.rate_pct", "Interest rate (%)", loan.rate_pct ?? "", "number") + input(
+        "loan.payment_monthly",
+        "Payment per month",
+        loan.payment_monthly ?? "",
+        "number"
+      ) + select(
+        "loan.category",
+        "Paid from category",
+        catOpts,
+        loan.category ?? "",
+        "Projections drop the payment from it once paid off"
+      ) + head("Lifetime", "optional: something that wears out, like a car") + input(
+        "life_years",
+        "Lifetime (years)",
+        r.life_years ?? "",
+        "number",
+        "Empty: no lifetime"
+      ) + input("age_years", "Age today (years)", r.age_years ?? 0, "number") + input("end_value", "Worth at the end of its life", r.end_value ?? 0, "number") + check("replace", "Replace it at the end of its life", r.replace ?? true) + input(
+        "replace_cost",
+        "Replacement cost",
+        r.replace_cost ?? "",
+        "number",
+        "Empty: what it's worth today"
+      ) + select(
+        "replace_in_todays_dollars",
+        "That cost is",
+        [
+          ["true", "Today's price (grows with inflation)"],
+          ["false", "The actual price then (as entered)"]
+        ],
+        String(r.replace_in_todays_dollars ?? true)
+      ) + head("Rental", "") + input(
+        "rent_monthly",
+        "Rent per month, after its costs",
+        r.rent_monthly ?? 0,
+        "number",
+        "A rental: counts as income"
+      );
+    };
+    el.innerHTML = `<div class="panel form">
+      <h3>Property</h3><p class="small muted">Homes, cars, rentals and other things you own. A
+        loan's payoff date comes from its balance, rate and payment. Something with a lifetime
+        loses value down to its end value; if it's replaced, Budgeting gets a yearly "Replace \u2026"
+        annual expense to set the money aside. Rent is income, before and after retiring. See the
+        Property section of the page.</p>
+      ${listEditor("properties", props, row2, "+ Add property")}
+      <div class="btns"><button class="btn primary" type="button" id="pr-save">Save</button></div>
+      <p class="msg" id="pr-msg"></p></div>`;
+    wireLists(el, { properties: () => row2() });
+    el.querySelector("#pr-save").addEventListener("click", async () => {
+      const msg = el.querySelector("#pr-msg");
+      try {
+        await save2("properties", mergeIds(props, readRows(el, "properties").map((r) => {
+          const loan = r.loan;
+          if (!loan || !loan.balance) delete r.loan;
+          else if (!loan.category) delete loan.category;
+          if (r.life_years === void 0) {
+            delete r.age_years;
+            delete r.end_value;
+            delete r.replace_cost;
+            delete r.replace_in_todays_dollars;
+            delete r.replace;
+          } else {
+            delete r.change_pct;
+            if (r.replace) delete r.replace;
+            if (r.replace_in_todays_dollars === "false") r.replace_in_todays_dollars = false;
+            else delete r.replace_in_todays_dollars;
+          }
+          if (!r.rent_monthly) delete r.rent_monthly;
+          if (!r.change_pct) delete r.change_pct;
+          return r;
         })));
         report(msg);
       } catch (err) {
@@ -4594,6 +5017,7 @@
     buildSpending();
     buildPlanner();
     buildCollege();
+    buildProperty();
     buildRetire();
     buildFuture();
     await buildBudgets();
