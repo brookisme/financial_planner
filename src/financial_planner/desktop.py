@@ -33,7 +33,7 @@ import time
 import urllib.request
 import webbrowser
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from financial_planner import __version__
 from financial_planner.cli import init_plan, load_plan_title
@@ -52,6 +52,7 @@ LOG_FILE: Path = APP_SUPPORT / 'desktop.log'
 SERVER_LOG: Path = APP_SUPPORT / 'server.log'
 ASSETS: Path = Path(__file__).parent / 'assets'
 PYPI_JSON: str = 'https://pypi.org/pypi/financial-planner/json'
+VERSION_CODE: str = 'import financial_planner; print(financial_planner.__version__)'
 DEFAULT_PORT: int = 8765
 START_TIMEOUT_S: float = 30.0
 DEMO_DIR: Path = Path.home() / 'FinancialPlan-Demo'
@@ -211,17 +212,16 @@ class App:
             return
         notify(f'Updating Financial Planner to {latest}…')
         self.stop()
-        # `pixi update` only rewrites the lock file; `pixi install` puts it into the environment
-        # (the app runs the environment's python directly, so nothing else would sync it).
-        for step in ('update', 'install'):
-            result = subprocess.run([pixi, step, '--manifest-path', manifest],
-                                    capture_output=True, text=True)
-            log(f'pixi {step}: {result.returncode}\n{result.stdout}\n{result.stderr}')
-            if result.returncode != 0:
-                break
-        if result.returncode != 0:
+        installed = update_environment(pixi, manifest)
+        if installed is None:
             self.start()
             alert(f'The update failed; still on {__version__}. Details are in {LOG_FILE}.')
+            return
+        if not is_newer(installed, __version__):
+            self.start()
+            alert(f"Version {latest} is out, but it couldn't be installed yet (still "
+                  f'{__version__}). PyPI can take a few minutes to catch up: try again soon. '
+                  f'Details are in {LOG_FILE}.')
             return
         self._relaunch()
 
@@ -388,6 +388,36 @@ def latest_version(url: str = PYPI_JSON) -> Optional[str]:
             return str(json.load(res)['info']['version'])
     except (OSError, ValueError, KeyError):
         return None
+
+
+def update_environment(pixi: str, manifest: str,
+                       run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run
+                       ) -> Optional[str]:
+    """Update the app's environment to the newest release and say which version it now has.
+
+    pixi's PyPI cache is cleared first: a package index it saw before a release can make
+    ``pixi update`` keep the old version. ``pixi update`` only rewrites the lock file, so
+    ``pixi install`` then puts it into the environment (the app runs the environment's python
+    directly, so nothing else would sync it).
+
+    Args:
+        pixi: The app's pixi executable.
+        manifest: The app's pixi.toml.
+        run: Runs a command (subprocess.run, or a stand-in for tests).
+
+    Returns:
+        The installed financial-planner version, or None if a step failed.
+    """
+    steps = [[pixi, 'clean', 'cache', '--pypi', '--yes'],
+             [pixi, 'update', '--manifest-path', manifest],
+             [pixi, 'install', '--manifest-path', manifest],
+             [sys.executable, '-c', VERSION_CODE]]
+    for i, cmd in enumerate(steps):
+        result = run(cmd, capture_output=True, text=True)
+        log(f'{" ".join(cmd[1:3])}: {result.returncode}\n{result.stdout}\n{result.stderr}')
+        if result.returncode != 0 and i > 0:    # a cache that can't be cleared is fine
+            return None
+    return result.stdout.strip() or None
 
 
 def is_newer(candidate: str, current: str) -> bool:
