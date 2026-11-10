@@ -10,6 +10,7 @@ License: BSD 3-Clause
 # Imports
 #
 import socket
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -174,3 +175,23 @@ def test_is_newer(candidate: str, current: str, newer: bool) -> None:
 
 def test_latest_version_handles_no_network() -> None:
     assert desktop.latest_version('http://127.0.0.1:9/nothing') is None
+
+
+def test_update_clears_the_cache_updates_installs_and_reports_the_version() -> None:
+    calls: list[list[str]] = []
+
+    def run(cmd: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        out = '0.9.0\n' if cmd[1] == '-c' else ''
+        return subprocess.CompletedProcess(cmd, 1 if cmd[1] == 'clean' else 0, out, '')
+
+    assert desktop.update_environment('pixi', 'env/pixi.toml', run) == '0.9.0'
+    assert [c[1] for c in calls] == ['clean', 'update', 'install', '-c']   # a failed clean is fine
+    assert calls[1] == ['pixi', 'update', '--manifest-path', 'env/pixi.toml']
+
+
+def test_update_stops_when_a_step_fails() -> None:
+    def run(cmd: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(cmd, 1 if cmd[1] == 'install' else 0, '', 'boom')
+
+    assert desktop.update_environment('pixi', 'env/pixi.toml', run) is None
