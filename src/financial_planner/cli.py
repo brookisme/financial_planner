@@ -8,6 +8,8 @@ The ``financial_plan`` command:
 - ``validate [dir]``: check the config and CSVs and print a summary.
 - ``inspect-csv FILE``: show a CSV's columns and a suggested ``sources`` entry.
 - ``categorize [dir]``: print per-category averages; ``--unmatched`` lists rows no rule caught.
+- ``amazon [dir]``: check an Amazon data export against the bank's Amazon charges, or print the
+  source, category and rules that add it.
 - ``export [dir]`` / ``import FILE [dir]``: pack a whole plan into one .zip / unpack one.
 - ``uninstall``: remove the desktop app and its downloaded files (never plans).
 - ``launcher``: make a double-click launcher (macOS: ``Financial Planner.app`` in /Applications).
@@ -27,6 +29,7 @@ import webbrowser
 from pathlib import Path
 from typing import Any, Optional
 
+from financial_planner import amazon
 from financial_planner.config import ConfigError, dump_yaml
 from financial_planner.launcher import (choose_plan_dir, create_shortcut, is_plan_dir,
                                         remember_plan)
@@ -162,6 +165,17 @@ def _parser() -> argparse.ArgumentParser:
                    help='list transactions no rule matched (they fell to a default)')
     p.set_defaults(func=_cmd_categorize)
 
+    p = sub.add_parser('amazon', help='check an Amazon data export against the bank\'s Amazon '
+                                      'charges (or show how to add it)')
+    p.add_argument('plan_dir', nargs='?', default='.', help='plan folder (default: here)')
+    p.add_argument('--exports', nargs='+', help='Amazon export folder(s), or a folder holding '
+                                                'several (default: the plan\'s Amazon source, '
+                                                f'else {amazon.EXPORT_DIR})')
+    p.add_argument('--cards', help='comma-separated card endings whose statements are in the '
+                                   'plan, e.g. 1234,5678 (default: the Amazon source\'s cards)')
+    p.add_argument('--csv', help='also write the items to this CSV, to look through')
+    p.set_defaults(func=_cmd_amazon)
+
     p = sub.add_parser('export', help='pack the whole plan into one .zip to share')
     p.add_argument('plan_dir', nargs='?', default='.', help='plan folder (default: here)')
     p.add_argument('-o', '--output', help='zip file to write (default: "<title> <date>.zip")')
@@ -269,6 +283,60 @@ def _cmd_categorize(args: argparse.Namespace) -> int:
         print(f'\n{len(rows)} transaction(s) matched no rule:')
         for r in rows:
             print(f'  {r["date"]}  {r["amount"]:10,.2f}  {r["source"]:16s} {r["description"]}')
+    return 0
+
+
+def _cmd_amazon(args: argparse.Namespace) -> int:
+    """``amazon``: card totals in an export, then bank vs itemized totals (or the setup to add)."""
+    plan_dir = Path(args.plan_dir)
+    data = load_plan(plan_dir)
+    source = next((s for s in data.config.sources if s.kind == 'amazon'), None)
+    name = source.name if source else amazon.SOURCE_NAME
+    folders = args.exports or (source.files if source else [amazon.EXPORT_DIR])
+    roots = [Path(f) if Path(f).is_absolute() else plan_dir / f for f in folders]
+    cards = ([c.strip() for c in args.cards.split(',') if c.strip()] if args.cards else
+             (source.cards if source else []))
+    bank = [t for t in data.transactions if t.source != name]
+    first = min((t.date for t in bank), default='')
+    last = max((t.date for t in bank), default='')
+    items, warnings = amazon.load_items(roots, cards=cards or None)
+    items = [i for i in items if (not first or i.date >= first) and (not last or i.date <= last)]
+    for warning in warnings:
+        print(f'warning: {warning}')
+    if not items:
+        print('no Amazon items found')
+        return 1
+    print(f'{len(items)} Amazon item(s) and refunds, {first or "start"} to {last or "end"} '
+          '(the dates the bank files cover)\n')
+    print(f'{"card":16s} {"purchases":>11s} {"refunds":>10s} {"rows":>6s}  dates')
+    for r in amazon.card_summary(items):
+        print(f'{r["card"]:16s} {r["purchases"]:11,.2f} {r["refunds"]:10,.2f} {r["rows"]:6d}  '
+              f'{r["first"]} to {r["last"]}')
+    if not cards:
+        print('\nkeep only the cards whose statements are in the plan with --cards 1234,5678 '
+              '("unknown" rows, mostly digital orders, are always kept)')
+    if args.csv:
+        print(f'\nwrote {amazon.write_items(items, Path(args.csv))}')
+    if not source or amazon.BANK_CATEGORY not in {r.category for r in data.config.rules}:
+        others = [s.name for s in data.config.sources if s.kind == 'csv']
+        folder = str(Path(folders[0])) if args.exports else amazon.EXPORT_DIR
+        print('\nto use it, add to config/ (or use Settings › Data sources › + Add Amazon '
+              'export):\n')
+        print(dump_yaml({'sources': [amazon.source_entry(folder, name, cards or None)]}))
+        print(dump_yaml({'categories': [{'name': amazon.BANK_CATEGORY, 'kind': 'ignore'}]}))
+        print('# above any other rule that mentions Amazon:')
+        print(dump_yaml({'rules': amazon.bank_rules(others)}))
+        return 0
+    rows = amazon.compare(data.transactions, data.assignments, data.months, source=name)
+    print(f'\nbank Amazon charges vs itemized, net of refunds ({data.months[0]} to '
+          f'{data.months[-1]}):\n')
+    print(f'{"month":8s} {"bank":>11s} {"itemized":>11s} {"diff":>10s}')
+    for r in rows:
+        print(f'{r["month"]:8s} {r["bank"]:11,.2f} {r["items"]:11,.2f} {r["diff"]:10,.2f}')
+    total = rows[-1]
+    if total['bank']:
+        print(f'\nitemized is {100 * total["diff"] / total["bank"]:+.1f}% of the bank total '
+              '(months differ a little: Amazon dates are ship dates, banks post later)')
     return 0
 
 
