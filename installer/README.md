@@ -90,5 +90,5 @@ Uninstall: menu-bar icon › **Uninstall…** (or `financial_plan uninstall`), o
 delete it and `~/Library/Application Support/FinancialPlanner/`. Plans are never touched.
 
 Updates: menu-bar icon › **Check for Updates…** compares the running version with PyPI, runs
-`pixi update` on the app's environment and relaunches the app (`FP_APP_BUNDLE`, set by the launch
-script).
+`pixi update` + `pixi install` on the app's environment and relaunches the app (`FP_APP_BUNDLE`,
+set by the launch script).
