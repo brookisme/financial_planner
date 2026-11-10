@@ -223,6 +223,7 @@ def build_payload(plan_dir: Path) -> dict[str, Any]:
         'other_income_monthly': cfg.other_income_monthly,
         'savings': [s.model_dump() for s in cfg.savings],
         'investments': [i.model_dump() for i in cfg.investments],
+        'properties': [p.model_dump() for p in cfg.properties],
         'assumptions': cfg.assumptions.model_dump(),
         'counts': {'transactions': len(data.transactions), 'in_window': len(tx)},
         'warnings': data.warnings,
