@@ -77,7 +77,6 @@ interface View {
 let state: {list: SavedBudget[]; active: string|null; view?: View} = {list: [], active: null};
 let pendingSwitch: string|null = null;
 let pendingDel = false;
-let pendingReset = false;
 
 /** A budget's settings on top of the current defaults. */
 const stOf = (b: SavedBudget): PlannerState => rebaseBudget(app.defs.st, b.st, b.base);
@@ -123,7 +122,6 @@ function apply(st: PlannerState): void {
 function touch(): void {
   pendingSwitch = null;
   pendingDel = false;
-  pendingReset = false;
   renderBar();
 }
 
@@ -153,7 +151,6 @@ function renderBar(): void {
   const del = $('bg-del');
   del.hidden = !a;
   del.textContent = pendingDel ? 'Click again to delete' : 'Delete';
-  $('bg-reset').textContent = pendingReset ? 'Click again to start over' : 'Start from averages';
   document.querySelectorAll<HTMLButtonElement>('[data-bg-tabs] button').forEach((btn) => {
     btn.addEventListener('click', () => {
       const id = btn.dataset.id!;
@@ -211,16 +208,5 @@ function wireBar(): void {
     state.active = null;
     persist();
     renderBar();
-  });
-  $('bg-reset').addEventListener('click', () => {
-    if (!pendingReset) {
-      pendingReset = true;
-      renderBar();
-      return;
-    }
-    pendingReset = false;
-    state.active = null;
-    persist();
-    apply(app.defs.st);
   });
 }
