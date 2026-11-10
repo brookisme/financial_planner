@@ -1,7 +1,7 @@
 # The environment the desktop app installs on first launch (NOT the dev pyproject.toml).
 # It's copied to ~/Library/Application Support/FinancialPlanner/env/ and installed there.
 # financial-planner comes from PyPI (no git needed); "Check for Updates…" in the menu-bar icon
-# runs `pixi update` then `pixi install`, which picks up new releases within the version range below.
+# clears pixi's PyPI cache, runs `pixi update` then `pixi install`, which picks up new releases within the version range below.
 # make-local-app.sh can swap the git source for a local checkout (FP_SOURCE=/path).
 
 [workspace]
