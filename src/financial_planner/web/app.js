@@ -74,7 +74,6 @@
     70: 1.24
   };
   var PROJECTION_YEARS = 35;
-  var COST_KINDS = ["annual", "one_time", "emergency"];
   var Data = class {
     constructor(p) {
       this.p = p;
@@ -126,11 +125,13 @@
     offsetsOf(name) {
       return this.credits.filter((i) => this.cats[i].offsets === name);
     }
-    /** Whether a credit is shown inside the planner table (not nested under a cost toggle). */
+    /**
+     * Whether a credit is planned in budgets (it reduces spending). Credits against 1-time or
+     * emergency costs are not: budgets have no line for those costs.
+     */
     isPlannerCredit(i) {
-      const off = this.cats[i].offsets;
-      const k = this.cats[this.idx(off ?? "")]?.kind;
-      return !off || !COST_KINDS.includes(k);
+      const k = this.cats[this.idx(this.cats[i].offsets ?? "")]?.kind;
+      return k !== "one_time" && k !== "emergency";
     }
     /** Emergency funds (they pay for emergency costs, in config order). */
     get funds() {
@@ -1349,6 +1350,111 @@
     });
   }
 
+  // src/ui/strip.ts
+  function buildStrip() {
+    built = true;
+    const host = $("strips");
+    host.addEventListener("change", (e) => {
+      const el = e.target;
+      const view2 = stripView();
+      if (el.dataset.cmp !== void 0) view2.cmp = el.value || null;
+      if (el.dataset.add !== void 0 && el.value) view2.rows.push(el.value);
+      view2.save();
+      refreshStrip();
+    });
+    host.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-rm]");
+      if (!b) return;
+      const view2 = stripView();
+      view2.rows.splice(+b.dataset.rm, 1);
+      view2.save();
+      refreshStrip();
+    });
+    onChange(refreshStrip);
+    refreshStrip();
+  }
+  function refreshStrip() {
+    if (!built) return;
+    const d = app.d;
+    const list = savedBudgets();
+    const choices = budgetChoices();
+    const view2 = stripView();
+    view2.rows = view2.rows.filter((id) => id === CURRENT || budgetSt(id));
+    if (view2.cmp && !budgetSt(view2.cmp)) view2.cmp = null;
+    const actual = budget(d, actualSt());
+    const planOf = (id) => {
+      if (id === CURRENT) return ["Current edits in Budgeting", app.S.st];
+      if (id === AVG) return [`${d.n}-month average`, app.defs.st];
+      return [`Budget \u201C${list.find((x) => x.id === id).name}\u201D`, budgetSt(id)];
+    };
+    const cmpSel = `<label class="eyebrow" for="strip-cmp">Compare with</label><select
+    id="strip-cmp" class="cmp-sel" data-cmp><option value="">Choose a budget</option>${choices.map(([v, n]) => `<option value="${esc(v)}"${v === view2.cmp ? " selected" : ""}>${esc(n)}</option>`).join("")}</select>`;
+    let h = `<div class="strip-head"><span class="eyebrow">Actuals</span><span
+    class="small muted">${esc(selectionLabel())}, as selected on the Spending chart</span></div>` + row(actual, "actual", view2.cmp ? vsTile(planOf(view2.cmp)[1], cmpSel) : `<div class="vs">${cmpSel}<span class="small muted">to see if you were over or under
+            it</span></div>`);
+    view2.rows.forEach((id, i) => {
+      const [name, st] = planOf(id);
+      const b = budget(d, st);
+      h += `<div class="strip-head plan"><span class="eyebrow">${esc(name)} \xB7 planned</span><button
+      class="btn sm" type="button" data-rm="${i}" aria-label="Hide ${esc(name)}">\xD7</button></div>` + row(b, "plan", vsTile(st, "", true));
+    });
+    const options = [
+      ...view2.rows.includes(CURRENT) ? [] : [[CURRENT, "Current edits"]],
+      ...choices.filter(([v]) => !view2.rows.includes(v))
+    ];
+    if (options.length) {
+      h += `<div class="strip-add"><select class="cmp-sel" data-add aria-label="Show a budget"><option
+      value="">+ Show a budget</option>${options.map(([v, n]) => `<option value="${esc(v)}">${esc(n)}</option>`).join("")}</select></div>`;
+    }
+    $("strips").innerHTML = h;
+  }
+  var CURRENT = "__current";
+  var built = false;
+  function actualSt(on2) {
+    const d = app.d;
+    const st = app.defs.st;
+    const plan = { ...st.plan };
+    Object.keys(plan).forEach((n) => plan[n] = selectionAvg(d.idx(n)));
+    const annual = d.annual.map((i) => ({ name: d.cats[i].name, amt: selectionAvg(i) * 12 }));
+    return {
+      ...st,
+      plan,
+      annual,
+      on: on2 ?? Object.fromEntries(Object.keys(st.on).map((k) => [k, true]))
+    };
+  }
+  function outgo(b) {
+    return b.spend + b.annual;
+  }
+  function row(b, cls, extra) {
+    const d = app.d;
+    const parts = [];
+    if (d.children.length) parts.push("529s");
+    d.p.savings.forEach((s) => parts.push(s.name));
+    if (b.investing) parts.push("investing");
+    const tile = (label2, v, note, more = "") => `<div${more}><span
+    class="eyebrow">${label2}</span><span class="v">${v}</span><span class="small muted">${note}</span></div>`;
+    return `<div class="strip ${cls}${extra ? " with-vs" : ""}">` + tile(
+      "Take-home income",
+      fmt(b.income),
+      `${esc(d.partners.map((x) => x.name).join(" + ") || "Household")}, net`
+    ) + tile("Spending", fmt(b.spend), b.credits ? `after ${fmt(b.credits)} of credits` : "regular categories") + tile("Savings", fmt(b.savings + b.investing), esc(parts.join(" + ") || "none set")) + tile("Annual expenses", fmt(b.annual), `${fmt(b.annual * 12)}/yr`) + tile(
+      "Left over each month",
+      `<span class="${b.left < 0 ? "neg" : "pos"}">${fmt(b.left)}</span>`,
+      `${b.left < 0 ? "short " : ""}${fmt(Math.abs(b.left) * 12)} over a year`,
+      ' class="result"'
+    ) + extra + "</div>";
+  }
+  function vsTile(st, head, plan = false) {
+    const p = outgo(budget(app.d, st));
+    const diff = outgo(budget(app.d, actualSt(st.on))) - p;
+    const pct = p ? Math.round(Math.abs(diff) / p * 100) : 0;
+    const same2 = Math.abs(diff) < 0.5;
+    const word = same2 ? "right on" : diff > 0 ? "over" : "under";
+    return `<div class="vs ${same2 ? "" : diff > 0 ? "over" : "under"}">${head || `<span class="eyebrow">${plan ? "Actuals vs this" : "vs budget"}</span>`}<span
+      class="v">${same2 ? "\u2013" : `${fmt(Math.abs(diff))} ${word}`}</span><span class="small">${same2 ? "spending matched it" : `${pct}% ${word} on spending + annual, per month`}</span></div>`;
+  }
+
   // src/ui/spending.ts
   var CREDIT_COLORS = ["--r2", "--r3", "--r4", "--r5", "--r1"];
   var MAX_ROWS = 400;
@@ -1519,6 +1625,7 @@
     buildTable();
     drawChart();
     drawDetail();
+    refreshStrip();
   }
   function setMode(v) {
     mode = v;
@@ -2012,7 +2119,7 @@
     h += `<tr class="total"><td>Total regular spending</td>
     <td class="num" id="t-p" style="padding-right:14px"></td><td class="num" id="t-c"></td>
     <td><span class="delta num" id="t-d"></span></td></tr>`;
-    const loose = d.credits.filter((c) => d.isPlannerCredit(c) && !d.cats[c].offsets);
+    const loose = d.credits.filter((c) => d.isPlannerCredit(c) && !d.regular.includes(d.idx(d.cats[c].offsets ?? "")));
     if (loose.length) h += loose.map(creditRow).join("");
     const body = $("ptbody");
     body.innerHTML = h;
@@ -2266,95 +2373,6 @@
     const names = d.funds.map((f) => f.name).join(" and ");
     const change = fundIn - b.emergency;
     $("em-note").textContent = d.funds.length ? `Paid from ${names}, not the monthly budget. ${fmt(fundIn)}/mo goes in, so it ${Math.abs(change) < 0.5 ? "holds steady" : change > 0 ? `grows ${fmt(change)}/mo` : `shrinks ${fmt(-change)}/mo`}. Empty = the same as what goes in. Whatever the fund can't cover comes out of that month.` : "No emergency fund in Settings \u203A Savings & income, so this counts as monthly spending.";
-  }
-
-  // src/ui/strip.ts
-  function buildStrip() {
-    const host = $("strips");
-    host.addEventListener("change", (e) => {
-      const el = e.target;
-      const view2 = stripView();
-      if (el.dataset.cmp !== void 0) view2.cmp = el.value || null;
-      if (el.dataset.add !== void 0 && el.value) view2.rows.push(el.value);
-      view2.save();
-      refreshStrip();
-    });
-    host.addEventListener("click", (e) => {
-      const b = e.target.closest("[data-rm]");
-      if (!b) return;
-      const view2 = stripView();
-      view2.rows.splice(+b.dataset.rm, 1);
-      view2.save();
-      refreshStrip();
-    });
-    onChange(refreshStrip);
-    refreshStrip();
-  }
-  function refreshStrip() {
-    const d = app.d;
-    const list = savedBudgets();
-    const choices = budgetChoices();
-    const view2 = stripView();
-    view2.rows = view2.rows.filter((id) => id === CURRENT || budgetSt(id));
-    if (view2.cmp && !budgetSt(view2.cmp)) view2.cmp = null;
-    const actual = budget(d, app.defs.st);
-    const planOf = (id) => {
-      if (id === CURRENT) return ["Current edits in Budgeting", app.S.st];
-      if (id === AVG) return [`${d.n}-month average`, app.defs.st];
-      return [`Budget \u201C${list.find((x) => x.id === id).name}\u201D`, budgetSt(id)];
-    };
-    const cmpSel = `<label class="eyebrow" for="strip-cmp">Compare with</label><select
-    id="strip-cmp" class="cmp-sel" data-cmp><option value="">Choose a budget</option>${choices.map(([v, n]) => `<option value="${esc(v)}"${v === view2.cmp ? " selected" : ""}>${esc(n)}</option>`).join("")}</select>`;
-    let h = `<div class="strip-head"><span class="eyebrow">Last ${d.n} months \xB7 actual</span><span
-    class="small muted">from your transactions</span></div>` + row(actual, "actual", view2.cmp ? vsTile(actual, planOf(view2.cmp)[1], cmpSel) : `<div class="vs">${cmpSel}<span class="small muted">to see if you were over or under
-            it</span></div>`);
-    view2.rows.forEach((id, i) => {
-      const [name, st] = planOf(id);
-      const b = budget(d, st);
-      h += `<div class="strip-head plan"><span class="eyebrow">${esc(name)} \xB7 planned</span><button
-      class="btn sm" type="button" data-rm="${i}" aria-label="Hide ${esc(name)}">\xD7</button></div>` + row(b, "plan", vsTile(actual, st, "", true));
-    });
-    const options = [
-      ...view2.rows.includes(CURRENT) ? [] : [[CURRENT, "Current edits"]],
-      ...choices.filter(([v]) => !view2.rows.includes(v))
-    ];
-    if (options.length) {
-      h += `<div class="strip-add"><select class="cmp-sel" data-add aria-label="Show a budget"><option
-      value="">+ Show a budget</option>${options.map(([v, n]) => `<option value="${esc(v)}">${esc(n)}</option>`).join("")}</select></div>`;
-    }
-    $("strips").innerHTML = h;
-  }
-  var CURRENT = "__current";
-  function outgo(b) {
-    return b.spend + b.annual;
-  }
-  function row(b, cls, extra) {
-    const d = app.d;
-    const parts = [];
-    if (d.children.length) parts.push("529s");
-    d.p.savings.forEach((s) => parts.push(s.name));
-    if (b.investing) parts.push("investing");
-    const tile = (label2, v, note, more = "") => `<div${more}><span
-    class="eyebrow">${label2}</span><span class="v">${v}</span><span class="small muted">${note}</span></div>`;
-    return `<div class="strip ${cls}${extra ? " with-vs" : ""}">` + tile(
-      "Take-home income",
-      fmt(b.income),
-      `${esc(d.partners.map((x) => x.name).join(" + ") || "Household")}, net`
-    ) + tile("Spending", fmt(b.spend), b.credits ? "after credits" : "regular categories") + tile("Savings", fmt(b.savings + b.investing), esc(parts.join(" + ") || "none set")) + tile("Annual expenses", fmt(b.annual), `${fmt(b.annual * 12)}/yr`) + tile(
-      "Left over each month",
-      `<span class="${b.left < 0 ? "neg" : "pos"}">${fmt(b.left)}</span>`,
-      `${b.left < 0 ? "short " : ""}${fmt(Math.abs(b.left) * 12)} over a year`,
-      ' class="result"'
-    ) + extra + "</div>";
-  }
-  function vsTile(actual, st, head, plan = false) {
-    const p = outgo(budget(app.d, st));
-    const diff = outgo(actual) - p;
-    const pct = p ? Math.round(Math.abs(diff) / p * 100) : 0;
-    const same2 = Math.abs(diff) < 0.5;
-    const word = same2 ? "right on" : diff > 0 ? "over" : "under";
-    return `<div class="vs ${same2 ? "" : diff > 0 ? "over" : "under"}">${head || `<span class="eyebrow">${plan ? `Last ${app.d.n} months vs this` : "vs budget"}</span>`}<span
-      class="v">${same2 ? "\u2013" : `${fmt(Math.abs(diff))} ${word}`}</span><span class="small">${same2 ? "spending matched it" : `${pct}% ${word} on spending + annual, per month`}</span></div>`;
   }
 
   // src/ui/budgets.ts
@@ -2904,8 +2922,8 @@
     number to try a change. Changed boxes turn blue.</li>
   <li><b>Save it.</b> Name it in the Budgets bar and click <i>Save as new</i>. Pick any saved
     budget (or the 12-mo avg) in the Compare column to see the difference line by line.</li>
-  <li><b>Check yourself against it.</b> At the top, compare the actual last 12 months with a
-    budget, or attach a budget to the Spending chart.</li>
+  <li><b>Check yourself against it.</b> At the top, compare the Actuals (the period on the
+    Spending chart) with a budget, or attach a budget to the Spending chart.</li>
   <li><b>Look at the long view.</b> <i>Retirement</i> shows income at each retirement age.
     <i>Spending over time</i> shows how costs change as children leave home.</li>
 </ol>
@@ -2935,8 +2953,10 @@
 
 <h3 id="h-strip">Summary rows</h3>
 <ul>
-  <li>The first row is always <b>the last 12 months, actual</b>: income, spending, savings,
-    annual expenses and what's left over. On its right, <i>Compare with</i> a budget (or the
+  <li>The first row is always the <b>Actuals</b> for the period selected on the Spending chart
+    (change the period or drag across months and it follows): income, spending, savings,
+    annual expenses and what's left over. Its spending counts every credit (money that really came
+    in), ticked or not. On its right, <i>Compare with</i> a budget (or the
     12-mo avg) to see whether you were over (red) or under (green) it.</li>
   <li><b>+ Show a budget</b> adds a row for any saved budget, or your current edits. Budget rows are
     dashed and say <i>planned</i>; \xD7 hides one.</li>
