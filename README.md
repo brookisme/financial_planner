@@ -64,6 +64,8 @@ More: [Desktop App](https://github.com/brookisme/financial_planner/wiki/Desktop-
 - **Explore spending**: monthly charts, top merchants and every transaction.
 - **College 529s**: a projection for each child against the cost of college.
 - **Property**: homes, cars and rentals: value, loans and payoff, replacement and rent.
+- **Amazon orders**: add Amazon's data export and every item gets its own category instead of one
+  "Amazon" lump, checked against the bank's Amazon charges.
 - **Retirement**: income at each retirement age from pensions, accounts, investments and Social Security.
 - **Spending over time**: how costs change as children leave home and after retiring.
 - **Scenarios**: save, compare and share what-ifs, or share the whole plan as one file.
@@ -122,6 +124,7 @@ Want an AI assistant to set it up with you? See [LLM_SETUP.md](https://github.co
 | `financial_plan inspect-csv FILE` | Show a CSV's columns and a suggested source entry. |
 | `financial_plan export [dir]` / `import FILE` | Share a whole plan (config + data) as one .zip. |
 | `financial_plan categorize [dir] [--unmatched]` | Category averages; rows no rule caught. |
+| `financial_plan amazon [dir]` | Check an Amazon data export against the bank's Amazon charges (or print the setup to add). |
 | `financial_plan uninstall` | Remove the desktop app and its files (plans are kept). |
 | `financial_plan launcher` | Mac: add Financial Planner.app to /Applications. Elsewhere: a desktop shortcut. |
 
