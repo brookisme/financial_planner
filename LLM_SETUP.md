@@ -72,10 +72,17 @@ graduation month if they know it.
   investment, by default the first one) and `return_pct` (interest).
 - `investments`: stocks (`type: stocks`) and bonds (`type: bonds`), each with `balance` and a
   return % (0 leaves it off).
-- Every 529, savings account and investment contributes either a fixed `monthly` amount or
+- Retirement accounts (under each partner): `pre_tax: true` (the default; a 401k / 403b out of
+  pay: a fixed `monthly` doesn't reduce the left-over) or `pre_tax: false` (a Roth IRA from
+  take-home), plus `employer_monthly` for a match.
+- Every 529, retirement account, savings account and investment contributes either a fixed `monthly` amount or
   `left_pct`, a percent of what is left over each month after spending, annual expenses and the
   fixed amounts, with optional `min_monthly` / `max_monthly`, or `rest: true` (an even share of
   whatever is left after the fixed and % contributions). Ask which the person prefers for each.
+- `properties` (optional): a home, car or rental with `value`; a home's `change_pct` (yearly,
+  e.g. 3); a `loan` with `balance`, `rate_pct`, `payment_monthly` and the spending `category` the
+  payment lands in (e.g. Housing); a car's `life_years`, `age_years`, `end_value` and `replace_cost`;
+  a rental's `rent_monthly` after its costs. Ask before adding any.
 - Children's names are optional; empty names become "Child 1", "Child 2", ...
 - Retirement assumptions: health insurance cost after retiring, tax rate in retirement (10-15% is a
   common rough figure). Keep the default return / inflation unless they have a view.
