@@ -120,6 +120,33 @@ graduation month if they know it.
 5. Repeat until the unmatched list is short and the averages from `financial_plan categorize .`
    look right to the person.
 
+### 5b. Amazon (optional, but worth offering)
+
+Banks show Amazon as one opaque charge per shipment, so it usually lands in one big
+"Shopping" lump. Amazon's own data export lists every item, so the plan can split it out.
+
+1. Ask whether they shop on Amazon much. If so, ask each person with an Amazon login to request
+   their data at amazon.com › Account › "Request your data" (choose "Your Orders"; it arrives by
+   email as a .zip within a few days) and unzip each export into its own folder under
+   `data/amazon/` (e.g. `data/amazon/partner_a/`). In the app, Settings › Data sources ›
+   "+ Add Amazon export" does this from the .zip and keeps only the CSV files.
+2. Run `financial_plan amazon .`. It prints totals per card over the dates the bank files cover,
+   and the `sources`, `categories` and `rules` entries to add.
+3. Use the per-card totals to pick the cards whose statements are in the plan (cards get
+   reissued with new numbers, so several endings can belong to one account; match the dates).
+4. Add the printed entries, with `cards: [...]` on the Amazon source (`kind: amazon`, `files:
+   data/amazon`). The rules set the bank's own Amazon rows aside in an `ignore` category so
+   nothing is counted twice; Prime membership and AWS stay on the bank side. Put them above any
+   other rule that mentions Amazon.
+5. Add rules for the items with `source: Amazon`: product-name rules first (`matches:
+   'vitamin|supplement'`), then Amazon's department (`field: category`, e.g. `equals: Grocery`),
+   then one catch-all (`field: source, equals: Amazon`) last.
+6. Run `financial_plan amazon .` again. With the setup in place it prints bank vs itemized totals
+   per month. Monthly differences of a few percent are normal (Amazon dates are ship dates,
+   gift-card balances); the yearly total should be within a few percent. A big gap usually means a
+   missing or extra card in `cards`.
+7. A new export just replaces the old one in its folder; nothing else needs rerunning.
+
 ### 6. Finish
 
 1. Run `financial_plan validate .` once more.
