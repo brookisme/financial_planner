@@ -107,48 +107,6 @@ class Pension(_Model):
     grows_with_raises: bool = True
 
 
-class Account(_Model):
-    """A retirement account (401k, 403b, IRA...).
-
-    Attributes:
-        name: Label.
-        balance: Balance today.
-        monthly: Amount added each month until retirement.
-    """
-    name: str = 'Retirement account'
-    balance: float = 0
-    monthly: float = 0
-
-
-class Partner(_Model):
-    """One adult in the household.
-
-    Attributes:
-        id: Short stable key (defaults to a slug of the name).
-        name: Display name. Generic names are recommended.
-        age: Age today.
-        take_home_monthly: Net pay per month.
-        take_home_note: Where the take-home number came from.
-        raise_pct: Yearly raise above inflation.
-        social_security: Social Security estimate.
-        retirement_age: Starting retirement age. For the first partner, empty uses
-            assumptions.retirement.default_age; for the others, empty means "the same year as the
-            first partner".
-        pensions: Pensions.
-        accounts: Retirement accounts.
-    """
-    id: Optional[str] = None
-    name: str
-    age: float = Field(..., ge=0, le=120)
-    take_home_monthly: float = 0
-    take_home_note: str = ''
-    raise_pct: float = 0
-    social_security: SocialSecurity = Field(default_factory=SocialSecurity)
-    retirement_age: Optional[int] = Field(None, ge=40, le=80)
-    pensions: list[Pension] = Field(default_factory=list)
-    accounts: list[Account] = Field(default_factory=list)
-
-
 class Contribution(_Model):
     """How much goes into a 529, savings account or investment each month.
 
@@ -179,6 +137,53 @@ class Contribution(_Model):
         if lo is not None and hi is not None and lo > hi:
             raise ValueError('min_monthly must not be more than max_monthly')
         return self
+
+
+class Account(Contribution):
+    """A retirement account (401k, 403b, IRA...). Contributions stop when its partner retires.
+
+    Attributes:
+        name: Label.
+        balance: Balance today.
+        pre_tax: Contributions come out of pay before take-home (a 401k / 403b): a fixed
+            ``monthly`` doesn't reduce the budget's left-over. With ``left_pct`` or ``rest`` it
+            takes its share of the left-over like any other line. False (a Roth IRA from
+            take-home pay): a savings line like the others, counted in the left-over.
+        employer_monthly: What the employer adds each month (a match), on top.
+    """
+    name: str = 'Retirement account'
+    balance: float = 0
+    pre_tax: bool = True
+    employer_monthly: float = Field(0, ge=0)
+
+
+class Partner(_Model):
+    """One adult in the household.
+
+    Attributes:
+        id: Short stable key (defaults to a slug of the name).
+        name: Display name. Generic names are recommended.
+        age: Age today.
+        take_home_monthly: Net pay per month.
+        take_home_note: Where the take-home number came from.
+        raise_pct: Yearly raise above inflation.
+        social_security: Social Security estimate.
+        retirement_age: Starting retirement age. For the first partner, empty uses
+            assumptions.retirement.default_age; for the others, empty means "the same year as the
+            first partner".
+        pensions: Pensions.
+        accounts: Retirement accounts.
+    """
+    id: Optional[str] = None
+    name: str
+    age: float = Field(..., ge=0, le=120)
+    take_home_monthly: float = 0
+    take_home_note: str = ''
+    raise_pct: float = 0
+    social_security: SocialSecurity = Field(default_factory=SocialSecurity)
+    retirement_age: Optional[int] = Field(None, ge=40, le=80)
+    pensions: list[Pension] = Field(default_factory=list)
+    accounts: list[Account] = Field(default_factory=list)
 
 
 class College529(Contribution):
@@ -273,6 +278,79 @@ class Investment(Contribution):
     type: Literal['stocks', 'bonds'] = 'stocks'
     balance: float = 0
     return_pct: float = 0
+
+
+class Loan(_Model):
+    """A loan against a property (mortgage, car loan), from its statement.
+
+    Attributes:
+        balance: Balance owed today.
+        rate_pct: Yearly interest rate.
+        payment_monthly: Monthly payment (principal and interest).
+        category: Optional spending or annual category the payment shows up in. From the payoff
+            date on, the projections drop the payment from it.
+    """
+    balance: float = Field(0, ge=0)
+    rate_pct: float = Field(0, ge=0)
+    payment_monthly: float = Field(0, ge=0)
+    category: Optional[str] = None
+
+    @model_validator(mode='after')
+    def _pays_off(self) -> 'Loan':
+        """The payment must cover more than the interest, or the loan is never paid off."""
+        interest = self.balance * self.rate_pct / 100 / 12
+        if self.balance > 0 and self.payment_monthly <= interest:
+            raise ValueError(f'loan: a payment of {self.payment_monthly:g} per month never pays '
+                             f'off {self.balance:g} at {self.rate_pct:g}% (interest alone is '
+                             f'{interest:.0f} per month)')
+        return self
+
+
+class Property(_Model):
+    """Something you own that holds or loses value: a home, a car, a rental.
+
+    Attributes:
+        id: Short stable key.
+        name: Label.
+        type: ``home``, ``car``, ``rental`` or ``other``.
+        value: What it's worth today.
+        change_pct: Yearly change in value (e.g. 3 for a home; negative loses value). Not used
+            when ``life_years`` is set.
+        loan: Optional loan against it.
+        life_years: Optional lifetime in years (a car). Its value goes down to ``end_value`` over
+            the years it has left.
+        age_years: How old it is today (with ``life_years``).
+        end_value: What it's worth at the end of its life (with ``life_years``).
+        replace: Buy a similar one at the end of its life (with ``life_years``): the budget gets a
+            yearly "Replace ..." annual expense of (replace_cost - end_value) / life_years, in
+            today's dollars.
+        replace_cost: What a replacement costs (default: ``value``).
+        replace_in_todays_dollars: ``replace_cost`` is today's price, which grows with inflation
+            until it's bought (the default). False: it's the actual price you expect to pay then.
+        rent_monthly: Rent it brings in per month, after its costs (a rental). Counts as income,
+            before and after retiring.
+    """
+    id: Optional[str] = None
+    name: str
+    type: Literal['home', 'car', 'rental', 'other'] = 'home'
+    value: float = Field(0, ge=0)
+    change_pct: float = 0
+    loan: Optional[Loan] = None
+    life_years: Optional[float] = Field(None, gt=0, le=100)
+    age_years: float = Field(0, ge=0)
+    end_value: float = Field(0, ge=0)
+    replace: bool = True
+    replace_cost: Optional[float] = Field(None, ge=0)
+    replace_in_todays_dollars: bool = True
+    rent_monthly: float = Field(0, ge=0)
+
+    @model_validator(mode='after')
+    def _check_life(self) -> 'Property':
+        """Lifetime fields must make sense together."""
+        if self.life_years is not None and self.age_years >= self.life_years:
+            raise ValueError(f'property {self.name!r}: age_years ({self.age_years:g}) must be '
+                             f'less than life_years ({self.life_years:g})')
+        return self
 
 
 class Preset(_Model):
@@ -509,6 +587,7 @@ class Config(_Model):
         other_income_monthly: Other take-home income per month.
         savings: Savings accounts and emergency funds.
         investments: Stock and bond accounts.
+        properties: Homes, cars, rentals and other things you own (with any loans).
         assumptions: Model assumptions.
         sources: CSV sources.
         categories: Categories.
@@ -521,6 +600,7 @@ class Config(_Model):
     other_income_monthly: float = 0
     savings: list[SavingsAccount] = Field(default_factory=list)
     investments: list[Investment] = Field(default_factory=list)
+    properties: list[Property] = Field(default_factory=list)
     assumptions: Assumptions = Field(default_factory=Assumptions)
     sources: list[Source] = Field(default_factory=list)
     categories: list[Category] = Field(default_factory=list)
@@ -538,6 +618,7 @@ class Config(_Model):
         _assign_ids(self.household.children, 'child')
         _assign_ids(self.savings, 'savings')
         _assign_ids(self.investments, 'investment')
+        _assign_ids(self.properties, 'property')
         names = [c.name for c in self.categories]
         dupes = sorted({n for n in names if names.count(n) > 1})
         if dupes:
@@ -554,6 +635,11 @@ class Config(_Model):
             if acct.overflow_to and acct.overflow_to not in investments:
                 raise ValueError(f'savings {acct.name!r}: overflow_to {acct.overflow_to!r} is not '
                                  f'an investment id (known: {", ".join(investments) or "none"})')
+        for prop in self.properties:
+            cat = prop.loan.category if prop.loan else None
+            if cat and kinds.get(cat) not in ('spending', 'annual'):
+                raise ValueError(f'property {prop.name!r}: loan category {cat!r} is not a '
+                                 'spending or annual category')
         schools = self.assumptions.college.schools
         for child in self.household.children:
             if child.school not in schools:
