@@ -9,4 +9,4 @@ License: BSD 3-Clause
 #
 # CONSTANTS
 #
-__version__: str = '0.2.0'
+__version__: str = '0.2.1'
