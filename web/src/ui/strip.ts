@@ -10,7 +10,7 @@
 
 import {$, app, onChange} from '../app';
 import {esc, fmt} from '../format';
-import {type Budget, budget} from '../model';
+import {annualComparableMo, type Budget, budget} from '../model';
 import type {PlannerState} from '../types';
 import {AVG, budgetChoices, budgetSt, savedBudgets, stripView} from './budgets';
 import {selectionAvg, selectionLabel} from './spending';
@@ -105,9 +105,12 @@ function actualSt(on?: Record<string, boolean>): PlannerState {
     on: on ?? Object.fromEntries(Object.keys(st.on).map((k) => [k, true]))};
 }
 
-/** Spending the over / under comparison uses: spending plus annual expenses. */
-function outgo(b: Budget): number {
-  return b.spend + b.annual;
+/**
+ * Spending the over / under comparison uses: spending plus annual expenses, without property
+ * replacement set-asides (they have no counterpart in the data).
+ */
+function outgo(st: PlannerState): number {
+  return budget(app.d, st).spend + annualComparableMo(app.d, st);
 }
 
 /** One row of tiles, with an optional comparison tile on the right. */
@@ -115,6 +118,7 @@ function row(b: Budget, cls: string, extra: string): string {
   const d = app.d;
   const parts = [];
   if (d.children.length) parts.push('529s');
+  if (d.accounts.some((a) => !a.acct.pre_tax)) parts.push('retirement');
   d.p.savings.forEach((s) => parts.push(s.name));
   if (b.investing) parts.push('investing');
   const tile = (label: string, v: string, note: string, more = '') => `<div${more}><span
@@ -124,7 +128,8 @@ function row(b: Budget, cls: string, extra: string): string {
            `${esc(d.partners.map((x) => x.name).join(' + ') || 'Household')}, net`) +
       tile('Spending', fmt(b.spend), b.credits ? `after ${fmt(b.credits)} of credits` :
            'regular categories') +
-      tile('Savings', fmt(b.savings + b.investing), esc(parts.join(' + ') || 'none set')) +
+      tile('Savings', fmt(b.savings + b.investing), esc(parts.join(' + ') || 'none set') +
+           (b.pretax ? ` · plus ${fmt(b.pretax)} pre-tax from pay` : '')) +
       tile('Annual expenses', fmt(b.annual), `${fmt(b.annual * 12)}/yr`) +
       tile('Left over each month', `<span class="${b.left < 0 ? 'neg' : 'pos'}">${fmt(b.left)}</span>`,
            `${b.left < 0 ? 'short ' : ''}${fmt(Math.abs(b.left) * 12)} over a year`, ' class="result"') +
@@ -133,8 +138,8 @@ function row(b: Budget, cls: string, extra: string): string {
 
 /** The over / under tile: the actual months' spending against a plan (its credits only). */
 function vsTile(st: PlannerState, head: string, plan = false): string {
-  const p = outgo(budget(app.d, st));
-  const diff = outgo(budget(app.d, actualSt(st.on))) - p;
+  const p = outgo(st);
+  const diff = outgo(actualSt(st.on)) - p;
   const pct = p ? Math.round(Math.abs(diff) / p * 100) : 0;
   const same = Math.abs(diff) < 0.5;
   const word = same ? 'right on' : diff > 0 ? 'over' : 'under';
