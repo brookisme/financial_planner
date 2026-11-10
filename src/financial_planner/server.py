@@ -22,6 +22,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
+from financial_planner import amazon
 from financial_planner.config import (DATA_DIR, ConfigError, format_validation_error,
                                       load_config, load_config_raw, save_section)
 from financial_planner.rules import preview
@@ -203,6 +204,47 @@ def create_app(plan_dir: Path) -> FastAPI:
                 'sample': [{'date': t.date, 'description': t.description, 'amount': t.amount,
                             'bank_category': t.bank_category} for t in rows[:PREVIEW_ROWS]]}
 
+    @app.post('/api/amazon/upload')
+    async def amazon_upload(request: Request, name: str = Query(...),
+                            folder: str = Query(amazon.EXPORT_DIR)) -> dict[str, Any]:
+        """Unpack an uploaded Amazon export zip (raw body) into folder/<name>, CSVs only."""
+        safe = SAFE_NAME_RE.sub('_', Path(name).name).strip() or 'export'
+        base = _inside_dir(plan_dir, folder, create=True)
+        try:
+            count = amazon.unpack_export(await request.body(), base / safe)
+        except ValueError as err:
+            raise HTTPException(400, str(err)) from err
+        return {'ok': True, 'folder': str(base.relative_to(plan_dir)), 'export': safe,
+                'files': count}
+
+    @app.get('/api/amazon/scan')
+    def amazon_scan(folder: str = amazon.EXPORT_DIR) -> dict[str, Any]:
+        """The exports and cards in an Amazon folder, over the dates the bank files cover, and
+        the category and rules that set the bank's own Amazon rows aside."""
+        base = _inside_dir(plan_dir, folder)
+        data = load_plan(plan_dir)
+        bank = [t for t in data.transactions
+                if t.source not in {s.name for s in data.config.sources if s.kind == 'amazon'}]
+        first = min((t.date for t in bank), default='')
+        last = max((t.date for t in bank), default='')
+        items, warnings = amazon.load_items([base])
+        items = [i for i in items if (not first or i.date >= first) and (not last or i.date <= last)]
+        return {'exports': [p.name for p in amazon.export_dirs(base)], 'first': first, 'last': last,
+                'cards': amazon.card_summary(items), 'warnings': warnings,
+                'category': amazon.BANK_CATEGORY,
+                'rules': amazon.bank_rules([s.name for s in data.config.sources
+                                            if s.kind == 'csv'])}
+
+    @app.get('/api/amazon/check')
+    def amazon_check() -> dict[str, Any]:
+        """Bank Amazon charges vs the itemized Amazon source, per month and in total."""
+        data = load_plan(plan_dir)
+        source = next((s for s in data.config.sources if s.kind == 'amazon'), None)
+        if not source:
+            return {'rows': []}
+        return {'source': source.name, 'rows': amazon.compare(
+            data.transactions, data.assignments, data.months, source=source.name)}
+
     @app.get('/api/plan/export')
     def export(state: bool = True) -> Response:
         """The whole plan as one .zip file (to send to someone)."""
@@ -259,12 +301,26 @@ def _versioned(html: str) -> str:
 
 
 def _data_files(plan_dir: Path) -> list[str]:
-    """CSV files under data/, relative to the plan folder."""
+    """CSV files under data/, relative to the plan folder (not those inside Amazon exports)."""
     data = plan_dir / DATA_DIR
     if not data.is_dir():
         return []
+    exports = [d for d in amazon.export_dirs(data) if d != data]
     return sorted(str(p.relative_to(plan_dir)) for p in data.rglob('*')
-                  if p.is_file() and p.suffix.lower() in ('.csv', '.txt'))
+                  if p.is_file() and p.suffix.lower() in ('.csv', '.txt')
+                  and not any(p.is_relative_to(d) for d in exports))
+
+
+def _inside_dir(plan_dir: Path, rel: str, create: bool = False) -> Path:
+    """Resolve a folder and refuse anything outside the plan folder."""
+    path = (plan_dir / rel).resolve()
+    if not path.is_relative_to(plan_dir.resolve()):
+        raise HTTPException(400, f'not in the plan folder: {rel}')
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
+    if not path.is_dir():
+        raise HTTPException(400, f'no such folder in the plan folder: {rel}')
+    return path
 
 
 def _inside(plan_dir: Path, rel: str) -> Path:
