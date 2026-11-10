@@ -13,6 +13,7 @@ import {buildCollege} from './ui/college';
 import {buildFuture} from './ui/future';
 import {buildHelp} from './ui/help';
 import {buildPlanner} from './ui/planner';
+import {buildProperty} from './ui/property';
 import {loadPresets} from './ui/presets';
 import {buildRetire} from './ui/retire';
 import {buildSpending} from './ui/spending';
@@ -95,6 +96,7 @@ async function start(): Promise<void> {
   buildSpending();
   buildPlanner();
   buildCollege();
+  buildProperty();
   buildRetire();
   buildFuture();
   await buildBudgets();
