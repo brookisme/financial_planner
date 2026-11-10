@@ -12,6 +12,7 @@ import {esc, fmt, sum} from '../format';
 import {budget, clone, overflowTarget, rebaseBudget, simulate} from '../model';
 import type {PlannerState, SavLine} from '../types';
 import {savedBudgets} from './budgets';
+import {buildFolds} from './folds';
 import {selectCat, selectionAvg, selectionLabel} from './spending';
 
 //
@@ -25,6 +26,7 @@ export function buildPlanner(): void {
       'average. Type a new number to try a change, and save it as a budget.';
   buildTable();
   buildSide();
+  buildFolds($('p-side'), $('p-fold-all'), 'fp-budget-folded');
   $('cmp-sel').addEventListener('change', () => {
     cmpKey = ($('cmp-sel') as HTMLSelectElement).value;
     update();
@@ -156,6 +158,8 @@ function creditRow(c: number): string {
 function savLabels(): Array<[string, string]> {
   const d = app.d;
   return [...d.children.map((c): [string, string] => [`529:${c.id}`, `529, ${c.name}`]),
+    ...d.accounts.map((a): [string, string] => [a.key, a.acct.pre_tax ?
+      `${a.acct.name} (pre-tax)` : a.acct.name]),
     ...d.p.savings.map((s): [string, string] => [`sav:${s.id}`, s.name]),
     ...d.p.investments.map((v): [string, string] => [`inv:${v.id}`, v.name])];
 }
@@ -180,14 +184,20 @@ function buildSide(): void {
         id="${attr}-${esc(key)}" data-${attr}="${esc(key)}" type="number" step="50"
         inputmode="decimal"></div>`;
   $('inc-rows').innerHTML = d.partners.map((x) => row(x.id, 'inc', x.name, x.take_home_note))
-      .join('') + row('other', 'inc', 'Other income');
+      .join('') + row('other', 'inc', 'Other income') +
+      d.props.filter((x) => x.rent_monthly || x.type === 'rental').map((x) =>
+        row(`prop:${x.id}`, 'inc', `Rent, ${x.name}`, 'after its costs')).join('');
   const kind = {stocks: 'stocks', bonds: 'bonds', savings: 'savings', emergency: 'emergency fund'};
   $('sav-rows').innerHTML =
       d.children.map((c) => savRow(`529:${c.id}`, `529, ${c.name}`)).join('') +
+      d.accounts.map((a) => savRow(a.key, a.acct.name, `${a.partner.name} · ${
+        a.acct.pre_tax ? 'pre-tax' : 'post-tax'}`)).join('') +
       p.savings.map((s) => savRow(`sav:${s.id}`, s.name, kind[s.type])).join('') +
       p.investments.map((v) => savRow(`inv:${v.id}`, v.name, kind[v.type])).join('');
   $('sav-note').textContent = [
     d.children.length ? '529 contributions stop at each child\'s high school graduation.' : '',
+    d.accounts.length ? 'Retirement accounts stop when their partner retires. A pre-tax one ' +
+        'on $/mo comes out of pay before take-home, so it doesn\'t change what\'s left over.' : '',
     p.investments.length ? 'Investments are added to their balance in Retirement and stop at ' +
         'retirement.' : '',
     'Fixed amounts come off first; "% left" takes a share of what is left after spending, ' +
@@ -338,7 +348,12 @@ function update(): void {
   sumLine('an', bp.annual, bc.annual, false);
   sumLine('em', bp.emergency, bc.emergency, false);
   $('em-how').textContent = fund ? '(paid from the fund, not in the total)' : '';
-  savLabels().forEach(([k]) => sumLine(k.replace(':', '-'), bp.amt[k] ?? 0, bc.amt[k] ?? 0, true));
+  savLabels().forEach(([k, label]) => {
+    const id = k.replace(':', '-');
+    sumLine(id, bp.amt[k] ?? 0, bc.amt[k] ?? 0, true);
+    const cell = $(`sp-${id}`).previousElementSibling!;
+    cell.textContent = d.fromPay(k, st.sav[k]) ? `${label}, from pay (not in the total)` : label;
+  });
   const total = (b: typeof bp) => b.spend + b.annual + b.savings + b.investing;
   sumLine('tot', total(bp), total(bc), false);
   $('an-total').textContent = `${fmt(sum(st.annual.map((a) => a.amt)))}/yr · ${fmt(bp.annual)}/mo`;
@@ -384,6 +399,12 @@ function updateSavings(): void {
     el.querySelector<HTMLElement>('[data-out]')!.textContent = `= ${fmt(b.amt[key] ?? 0)}/mo`;
     el.querySelector<HTMLElement>('[data-rest]')!.textContent = `${fmt(b.amt[key] ?? 0)}/mo`;
     const note: string[] = [];
+    const ac = d.accounts.find((x) => x.key === key)?.acct;
+    if (ac?.pre_tax) {
+      note.push(line.mode === 'fixed' ? 'from pay, before take-home' :
+          'from the left-over, like the other lines');
+    }
+    if (ac?.employer_monthly) note.push(`+ ${fmt(ac.employer_monthly)}/mo from the employer`);
     const sv = d.p.savings.find((x) => `sav:${x.id}` === key);
     if (sv) {
       note.push(`${fmt(sv.balance)} today${sv.max_balance != null ?
