@@ -726,20 +726,131 @@ function renderSources(el: HTMLElement): void {
         'none yet'}.</p>
       <div class="cards">${sources.map((s, i) => `<div class="card"><b>${esc(s.name)}</b>
         <span class="small mono">${esc([s.files].flat().join(', '))}</span>
-        <span class="small muted">date "${esc((s.date as Dict)?.column)}", ${esc(describe(s))}</span>
+        <span class="small muted">${s.kind === 'amazon' ? `Amazon export · ${
+          (s.cards as string[] | undefined)?.length ? `cards ${esc((s.cards as string[])
+            .join(', '))}` : 'every card'}</span><span class="small" data-amazon-check>` :
+          `date "${esc((s.date as Dict)?.column)}", ${esc(describe(s))}`}</span>
         <div class="card-actions"><button class="btn sm" type="button" data-edit="${i}">Edit</button>
           <button class="btn sm danger" type="button" data-rm="${i}">Remove</button></div></div>`)
         .join('')}
-        <button class="card btn add" type="button" id="add-src" style="place-content:center;min-height:110px">+ Add data source</button></div>
+        <button class="card btn add" type="button" id="add-src" style="place-content:center;min-height:110px">+ Add data source</button>
+        ${sources.some((s) => s.kind === 'amazon') ? '' : `<button class="card btn add" type="button"
+          id="add-amazon" style="place-content:center;min-height:110px">+ Add Amazon export</button>`}</div>
+      <p class="small muted">An <b>Amazon export</b> lists every item you bought, so Amazon
+        charges can be split into real categories instead of one lump. Request it at amazon.com ›
+        Account › <i>Request your data</i> (<i>Your Orders</i>); it arrives as a .zip.</p>
       <p class="msg" id="src-msg"></p></div>`;
   const msg = el.querySelector('#src-msg');
   el.querySelector('#add-src')!.addEventListener('click', () => sourceForm(null, sources));
+  el.querySelector('#add-amazon')?.addEventListener('click', () => amazonForm(null, sources));
   el.querySelectorAll<HTMLButtonElement>('[data-edit]').forEach((b) => b.addEventListener('click',
-      () => sourceForm(+b.dataset.edit!, sources)));
+      () => sources[+b.dataset.edit!].kind === 'amazon' ? amazonForm(+b.dataset.edit!, sources) :
+        sourceForm(+b.dataset.edit!, sources)));
+  const check = el.querySelector<HTMLElement>('[data-amazon-check]');
+  if (check) {
+    check.textContent = 'Checking against the bank…';
+    get<{rows: Array<{bank: number; items: number; diff: number}>}>('/api/amazon/check')
+        .then(({rows}) => {
+          const t = rows[rows.length - 1];
+          check.textContent = !t ? '' : !t.bank ? `Itemized ${fmt(t.items)}; no bank Amazon ` +
+              'charges set aside yet.' : `Itemized ${fmt(t.items)} vs ${fmt(t.bank)} on the ` +
+              `bank side (${t.diff >= 0 ? '+' : '−'}${Math.abs(100 * t.diff / t.bank).toFixed(1)}%)`;
+        }, () => check.textContent = '');
+  }
   el.querySelectorAll<HTMLButtonElement>('.card [data-rm]').forEach((b) => confirmClick(b, () => {
     sources.splice(+b.dataset.rm!, 1);
     save('sources', sources).then(() => renderTab(), (err) => report(msg, err));
   }));
+}
+
+/** Add / edit the Amazon export source: upload, pick the cards, set the bank's rows aside. */
+function amazonForm(i: number|null, sources: Dict[]): void {
+  const s: Dict = i === null ? {name: 'Amazon', kind: 'amazon', files: 'data/amazon'} : sources[i];
+  const chosen = new Set((s.cards as string[] | undefined) ?? []);
+  interface Scan {exports: string[]; first: string; last: string; warnings: string[];
+                  category: string; rules: Dict[];
+                  cards: Array<{card: string; purchases: number; refunds: number; rows: number;
+                                first: string; last: string}>}
+  let scan: Scan|null = null;
+  const html = `<div class="fgrid">
+      ${input('name', 'Name', s.name)}
+      ${input('files', 'Folder', [s.files].flat()[0], 'text',
+              'Where the exports are kept, one folder per person')}
+      ${input('who', 'Whose export is it?', '', 'text', 'e.g. Partner A', 'data-optional')}
+      <label class="field"><span>Add an export (.zip from Amazon)</span><input type="file"
+        id="az-up" accept=".zip,application/zip"><span class="hint">Only its CSV files are kept
+        (not the delivery photos)</span></label>
+    </div>
+    <p class="small muted" id="az-exports"></p>
+    <div id="az-cards"></div>
+    ${check('setaside', 'Set aside the bank\'s Amazon charges (not Prime or AWS) so they aren\'t ' +
+      'counted twice', true)}
+    <p class="small muted">Then sort the items into categories with rules on <i>source:
+      ${esc(s.name)}</i> in Settings › Categorize (Amazon's department is the bank category).</p>`;
+  formDialog(i === null ? 'Add Amazon export' : `Edit ${s.name}`, html, async (form) => {
+    const f = readFields(form);
+    const cards = [...form.querySelectorAll<HTMLInputElement>('[data-card]:checked')]
+        .map((x) => x.dataset.card!);
+    const entry: Dict = {name: f.name, kind: 'amazon', files: f.files || 'data/amazon'};
+    if (cards.length) entry.cards = cards;
+    const list = sources.slice();
+    if (i === null) list.push(entry);
+    else list[i] = entry;
+    await save('sources', list);
+    if (f.setaside && scan) {
+      const cats = section<Dict[]>('categories', []);
+      if (!cats.some((c) => c.name === scan!.category)) {
+        await save('categories', [...cats, {name: scan.category, kind: 'ignore'}]);
+      }
+      const rules = section<Dict[]>('rules', []);
+      const missing = scan.rules.filter((r) => !rules.some((x) =>
+        x.category === r.category && x.source === r.source));
+      if (missing.length) await save('rules', [...missing, ...rules]);
+    }
+    sources.splice(0, sources.length, ...list);
+  });
+  const form = document.getElementById('fd-body')!;
+  const folder = () => (form.querySelector('[data-k="files"]') as HTMLInputElement).value.trim() ||
+      'data/amazon';
+  const rescan = async () => {
+    const box = form.querySelector('#az-cards')!;
+    try {
+      scan = await get<Scan>(`/api/amazon/scan?folder=${encodeURIComponent(folder())}`);
+    } catch (err) {
+      scan = null;
+      box.innerHTML = `<p class="small muted">${esc((err as Error).message)}. Add an export
+        above.</p>`;
+      return;
+    }
+    form.querySelector('#az-exports')!.textContent = scan.exports.length ?
+        `Exports: ${scan.exports.join(', ')}.` : 'No exports in this folder yet.';
+    const known = scan.cards.filter((c) => c.card !== 'unknown');
+    box.innerHTML = !scan.cards.length ? '' : `<p class="small"><b>Cards</b>: tick the ones
+      whose statements are in this plan (${esc(scan.first)} to ${esc(scan.last)}). A reissued
+      card has a new number; match the dates.</p><div class="listed">${known.map((c) =>
+      `<label class="field check"><input type="checkbox" data-card="${esc(c.card)}"${
+        !chosen.size || chosen.has(c.card) ? ' checked' : ''}>•••• ${esc(c.card)} · ${
+        fmt(c.purchases)} in ${c.rows} rows, ${esc(c.first)} to ${esc(c.last)}</label>`)
+      .join('')}</div>${scan.cards.some((c) => c.card === 'unknown') ? '<p class="small ' +
+      'muted">Items with no card (mostly digital orders) are always kept.</p>' : ''}`;
+  };
+  form.querySelector('[data-k="files"]')!.addEventListener('change', rescan);
+  form.querySelector<HTMLInputElement>('#az-up')!.addEventListener('change', async (e) => {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    const who = (form.querySelector('[data-k="who"]') as HTMLInputElement).value.trim() ||
+        file.name.replace(/\.zip$/i, '');
+    const out = form.querySelector('#az-exports')!;
+    out.textContent = 'Unpacking…';
+    try {
+      await upload(`/api/amazon/upload?name=${encodeURIComponent(who)}&folder=${
+        encodeURIComponent(folder())}`, file);
+      await rescan();
+    } catch (err) {
+      out.textContent = (err as Error).message;
+    }
+  });
+  rescan();
 }
 
 /** Add / edit a source, with column detection and a live preview. */
