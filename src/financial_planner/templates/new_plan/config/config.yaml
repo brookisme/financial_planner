@@ -16,7 +16,9 @@ household:
       social_security:
         at_67: 0                # monthly estimate from your Social Security statement
       pensions: []              # e.g. - {name: Pension, estimates: {55: 900, 60: 2800, 65: 5800}}
-      accounts: []              # e.g. - {name: 401(k), balance: 50000, monthly: 500}
+      accounts: []              # e.g. - {name: 401(k), balance: 50000, monthly: 500,
+                                #         employer_monthly: 250}   (pre-tax, from pay)
+                                #      - {name: Roth IRA, pre_tax: false, monthly: 200}
   children: []                  # e.g. - {age: 8, college_529: {balance: 10000, monthly: 250}}
                                 #   (name defaults to Child 1, Child 2, ...)
 
@@ -29,6 +31,13 @@ savings:
 investments:
   - {name: Stocks, type: stocks, balance: 0, return_pct: 0, monthly: 0}
   - {name: Bonds, type: bonds, balance: 0, return_pct: 0, monthly: 0}
+# Homes, cars, rentals: e.g.
+#   - {name: Home, type: home, value: 400000, change_pct: 3,
+#      loan: {balance: 250000, rate_pct: 6, payment_monthly: 1800, category: Housing}}
+#   - {name: Car, type: car, value: 15000, life_years: 12, age_years: 4, end_value: 3000,
+#      replace_cost: 35000}
+#   - {name: Rental, type: rental, value: 300000, rent_monthly: 1200}
+properties: []
 
 assumptions:
   retirement:
