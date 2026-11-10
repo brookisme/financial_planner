@@ -128,7 +128,7 @@ describe('defaults', () => {
     const {d, s} = setup();
     expect(s.st.plan.Groceries).toBe(1100);
     expect(s.st.plan.Reimb).toBe(200);
-    expect(s.st.plan.Refund).toBeUndefined();       // nested under an annual cost
+    expect(s.st.plan.Refund).toBe(300);             // offsets an annual cost: still planned
     expect(s.st.on).toEqual({Reimb: true, Refund: true, 'Other credits': false});
     expect(s.st.annual).toEqual([{name: 'Income tax', amt: 14400},
                                  {name: 'Property tax', amt: 7200}]);
@@ -144,16 +144,16 @@ describe('defaults', () => {
 describe('monthly budget', () => {
   it('subtracts toggled credits and adds the annual list as a monthly amount', () => {
     const {d, s} = setup();
-    expect(creditsMo(d, s.st)).toBe(200);
+    expect(creditsMo(d, s.st)).toBe(500);            // Reimb 200 + Refund 300
     expect(creditsMo(d, s.st, true)).toBe(0);        // reimbursements stop at retirement
     expect(annualMo(s.st)).toBe(1800);               // (14400 + 7200) / 12
     const b = budget(d, s.st);
     expect(b.income).toBe(13000);
     expect(b.regular).toBe(1600);
-    expect(b.spend).toBe(1400);
+    expect(b.spend).toBe(1100);
     expect(b.annual).toBe(1800);
     expect(b.savings).toBe(2100);
-    expect(b.left).toBe(13000 - 1400 - 1800 - 2100);
+    expect(b.left).toBe(13000 - 1100 - 1800 - 2100);
     s.st.annual.push({name: 'House', amt: 2400});
     s.st.annual = s.st.annual.filter((a) => a.name !== 'Income tax');
     expect(budget(d, s.st).annual).toBe((7200 + 2400) / 12);
@@ -181,19 +181,19 @@ describe('contributions', () => {
 
   it('puts a percent of the left-over into a line in the budget', () => {
     const {d, s} = setup();
-    expect(budget(d, s.st).left).toBe(7700);
+    expect(budget(d, s.st).left).toBe(8000);
     s.st.sav['inv:br'] = line(0, {mode: 'pct', pct: 25});
     const b = budget(d, s.st);
-    expect(b.amt['inv:br']).toBe(1925);
-    expect(b.investing).toBe(1925);
-    expect(b.left).toBe(5775);
+    expect(b.amt['inv:br']).toBe(2000);
+    expect(b.investing).toBe(2000);
+    expect(b.left).toBe(6000);
   });
 
   it('recomputes percent lines each year from that year\'s left-over', () => {
     const {d, s} = setup();
     s.st.sav['inv:br'] = line(0, {mode: 'pct', pct: 50});
-    expect(spendAt(d, s, 2030).savings).toBe(2100 + 3850);
-    expect(spendAt(d, s, 2035).savings).toBeCloseTo(1300 + 8775 / 2, 8);   // older child out
+    expect(spendAt(d, s, 2030).savings).toBe(2100 + 4000);
+    expect(spendAt(d, s, 2035).savings).toBeCloseTo(1300 + 9075 / 2, 8);   // older child out
   });
 });
 
@@ -237,8 +237,8 @@ describe('emergency costs', () => {
     const {d, s} = withEmergency(false);
     expect(budget(d, s.st).emergency).toBe(0);
     s.st.emerg = 600;
-    expect(budget(d, s.st).spend).toBe(2000);
-    expect(spendAt(d, s, 2030).spend).toBe(2000 + 1800);
+    expect(budget(d, s.st).spend).toBe(1700);
+    expect(spendAt(d, s, 2030).spend).toBe(1700 + 1800);
   });
 
   it('default to what goes into the fund, so it holds steady', () => {
@@ -251,11 +251,11 @@ describe('emergency costs', () => {
     const {d, s} = withEmergency(true);
     s.st.emerg = 600;
     const b = budget(d, s.st);
-    expect([b.spend, b.emergency, b.left]).toEqual([1400, 600, 7700]);
+    expect([b.spend, b.emergency, b.left]).toEqual([1100, 600, 8000]);
     // 3000 + 500/mo in - 600/mo out: covered for 25 months, then 100/mo short
-    expect(spendAt(d, s, 2026)).toMatchObject({emergency: 600, short: 0, spend: 3200});
+    expect(spendAt(d, s, 2026)).toMatchObject({emergency: 600, short: 0, spend: 2900});
     expect(spendAt(d, s, 2028).short).toBeCloseTo(100 * 9 / 12, 8);
-    expect(spendAt(d, s, 2029)).toMatchObject({short: 100, spend: 3300});
+    expect(spendAt(d, s, 2029)).toMatchObject({short: 100, spend: 3000});
   });
 });
 
