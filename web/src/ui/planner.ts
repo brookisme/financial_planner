@@ -11,7 +11,7 @@ import {$, $in, app, changed, num, onChange, scrollToEl} from '../app';
 import {esc, fmt, sum} from '../format';
 import {budget, clone, overflowTarget, rebaseBudget, simulate} from '../model';
 import type {PlannerState, SavLine} from '../types';
-import {savedBudgets} from './budgets';
+import {budgetChoices, budgetSt, savedBudgets} from './budgets';
 import {buildFolds} from './folds';
 import {selectCat, selectionAvg, selectionLabel} from './spending';
 
@@ -73,6 +73,7 @@ export function refreshCompare(): void {
 //
 // INTERNAL
 //
+const FILL_CHART = '__chart';
 let cmpKey = 'avg';
 
 /** The planner settings in the Compare column. */
@@ -241,19 +242,32 @@ function buildSide(): void {
     fillPlanner();
     changed();
   });
-  const fill = $('fill');
-  fill.addEventListener('mouseenter', () => {
-    fill.title = `Set Planned / mo to the averages for ${selectionLabel()}, the period shown in ` +
-        'Spending';
-  });
-  fill.addEventListener('click', () => {
+  // the Planned / mo header is a menu: fill the column from the chart, the average or a budget
+  const fillSel = $('fill-sel') as HTMLSelectElement;
+  const fillOptions = () => {
+    fillSel.innerHTML = '<option value="">Planned / mo</option><optgroup label="Fill from">' +
+        [[FILL_CHART, `Spending chart: ${selectionLabel()}`], ...budgetChoices()].map(([v, n]) =>
+          `<option value="${esc(v)}">${esc(n)}</option>`).join('') + '</optgroup>';
+  };
+  fillSel.addEventListener('focus', fillOptions);
+  fillSel.addEventListener('mousedown', fillOptions);
+  fillSel.addEventListener('change', () => {
+    const v = fillSel.value;
+    const from = v === FILL_CHART ? null : budgetSt(v);
+    if (!v || (v !== FILL_CHART && !from)) return;
+    const st = app.S.st;
     [...d.regular, ...d.credits.filter((c) => d.isPlannerCredit(c))].forEach((i) => {
-      app.S.st.plan[d.cats[i].name] = Math.round(selectionAvg(i));
+      const n = d.cats[i].name;
+      st.plan[n] = from ? from.plan[n] ?? 0 : Math.round(selectionAvg(i));
     });
+    if (from) d.credits.forEach((c) => st.on[d.cats[c].name] = !!from.on[d.cats[c].name]);
+    const what = fillSel.selectedOptions[0].textContent;
+    fillSel.value = '';
     fillPlanner();
     changed();
-    $('trim-note').textContent = `Filled from Spending: ${selectionLabel()}.`;
+    $('trim-note').textContent = `Planned / mo filled from ${what}.`;
   });
+  fillOptions();
   $('trim').addEventListener('click', () => {
     flex.forEach((i) => app.S.st.plan[d.cats[i].name] = Math.round(d.avg(i) * 0.9));
     fillPlanner();
