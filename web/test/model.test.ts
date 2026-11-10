@@ -7,11 +7,15 @@
 
 import {describe, expect, it} from 'vitest';
 
-import {ageWhen, annualMo, budget, clone, compact, contributions, creditsMo, Data, defaults,
+import {sum} from '../src/format';
+
+import {ageWhen, annualComparableMo, annualMo, budget, clone, compact, contributions, creditsMo, Data, defaults,
         describeData, diffBudget, diffSettings, expand, flatten, fv, incomeAt, interpolatePension,
-        kidCalc, rebase, rebaseBudget, results, retireYear, retirementIncome, retirementSavings,
-        simulate, spendAt, ssFactor} from '../src/model';
-import type {Category, Contribution, Payload, SavLine, Settings} from '../src/types';
+        kidCalc, loanBalance, loanInterest, loanMonths, propertyEquity, propertyValue, rebase,
+        rebaseBudget, replaceMo, replaceYear, results, retireYear, retirementIncome,
+        retirementSavings, settingLabel, simulate, spendAt, ssFactor} from '../src/model';
+import type {Account, Category, Contribution, Loan, Payload, Property, SavLine,
+             Settings} from '../src/types';
 
 //
 // CONSTANTS
@@ -51,7 +55,8 @@ function payload(): Payload {
          raise_pct: 0, social_security: {at_67: 3000, claim_age: null}, retirement_age: null,
          pensions: [{name: 'Pension', estimates: {55: 1000, 60: 2500, 65: 4500}, monthly: null,
                      service_years_now: 5, grows_with_raises: true}],
-         accounts: [{name: '403b', balance: 100000, monthly: 0}]},
+         accounts: [{name: '403b', balance: 100000, pre_tax: true, employer_monthly: 0,
+                     ...fixed(0)}]},
         {id: 'b', name: 'Partner B', age: 47, take_home_monthly: 5000, take_home_note: '',
          raise_pct: 0, social_security: {at_67: 2000, claim_age: 62}, retirement_age: null,
          pensions: [],
@@ -133,8 +138,8 @@ describe('defaults', () => {
     expect(s.st.annual).toEqual([{name: 'Income tax', amt: 14400},
                                  {name: 'Property tax', amt: 7200}]);
     expect(s.st.emerg).toBeNull();
-    expect(s.st.sav).toEqual({'529:k1': line(800), '529:k2': line(800), 'sav:em': line(500),
-      'inv:br': line(0)});
+    expect(s.st.sav).toEqual({'529:k1': line(800), '529:k2': line(800), 'acct:a:0': line(0),
+      'sav:em': line(500), 'inv:br': line(0)});
     expect(s.cs.k1).toEqual({school: 'state', cost: 40000, ret: 6, inf: 4});
     expect(s.rs.pen['a:0'].est['60']).toBe(2500);
     expect(d.primary.id).toBe('a');
@@ -256,6 +261,153 @@ describe('emergency costs', () => {
     expect(spendAt(d, s, 2026)).toMatchObject({emergency: 600, short: 0, spend: 2900});
     expect(spendAt(d, s, 2028).short).toBeCloseTo(100 * 9 / 12, 8);
     expect(spendAt(d, s, 2029)).toMatchObject({short: 100, spend: 3000});
+  });
+});
+
+describe('retirement account contributions', () => {
+  /** The fixture with the 403b set up as given. */
+  function withAccount(extra: Partial<Account>): {d: Data; s: Settings} {
+    const p = payload();
+    Object.assign(p.household.partners[0].accounts[0], extra);
+    const d = new Data(p);
+    return {d, s: defaults(d)};
+  }
+
+  it('takes pre-tax contributions from pay, not from the left-over', () => {
+    const plain = setup();
+    const base = budget(plain.d, plain.s.st);
+    const {d, s} = withAccount({monthly: 1000, employer_monthly: 500});
+    const b = budget(d, s.st);
+    expect([b.amt['acct:a:0'], b.pretax, b.left]).toEqual([1000, 1000, base.left]);
+    expect(b.savings + b.investing).toBe(base.savings + base.investing);
+  });
+
+  it('takes post-tax contributions from the left-over like other savings', () => {
+    const {d, s} = withAccount({pre_tax: false, monthly: 0, left_pct: 10});
+    const free = 13000 - 1100 - 1800 - 2100;           // income - spending - annual - fixed lines
+    const b = budget(d, s.st);
+    expect(b.amt['acct:a:0']).toBe(free * 0.1);
+    expect(b.left).toBe(free * 0.9);
+    expect(b.pretax).toBe(0);
+  });
+
+  it('takes a pre-tax % or rest line from the left-over like any other line', () => {
+    const {d, s} = withAccount({left_pct: 10});
+    const free = 13000 - 1100 - 1800 - 2100;
+    const b = budget(d, s.st);
+    expect([b.amt['acct:a:0'], b.pretax, b.left]).toEqual([free * 0.1, 0, free * 0.9]);
+    s.st.sav['acct:a:0'] = line(0, {mode: 'rest'});
+    expect(budget(d, s.st).amt['acct:a:0']).toBe(free);
+    s.st.sav['acct:a:0'] = line(700);                     // back to $/mo: from pay again
+    expect(budget(d, s.st).pretax).toBe(700);
+    const sim = simulate(d, {...s, st: {...s.st, sav: {...s.st.sav,
+      'acct:a:0': line(0, {mode: 'pct', pct: 10})}}}, 65);
+    expect(sim.paid['acct:a:0']).toBeGreaterThan(100000 + free * 0.1 * 179);
+  });
+
+  it('grows with its own and the employer\'s contributions until its partner retires', () => {
+    const {d, s} = withAccount({monthly: 1000, employer_monthly: 500});
+    const sim = simulate(d, s, 65);
+    const n = 15 * 12;                                 // Partner A: 50 -> 65
+    expect(sim.at['acct:a:0']).toBeCloseTo(closedFv(100000, 1500, n, 0.055), 4);
+    expect(sim.paid['acct:a:0']).toBe(100000 + 1500 * n);
+    const acct = retirementIncome(d, s, 65).parts.find((x) => x.kind === 'account')!;
+    expect(acct.balance).toBeCloseTo(sim.at['acct:a:0'], 6);
+    expect(acct.invested).toBe(100000 + 1500 * n);
+    // pre-tax and employer money isn't taken from take-home, so it isn't in "savings" over time
+    const plain = setup();
+    expect(spendAt(d, s, 2030).savings).toBe(spendAt(plain.d, plain.s, 2030).savings);
+  });
+});
+
+describe('property', () => {
+  const loan = (balance: number, rate: number, payment: number, category: string|null = null):
+      Loan => ({balance, rate_pct: rate, payment_monthly: payment, category});
+  const prop = (extra: Partial<Property>): Property => ({id: 'x', name: 'X', type: 'home',
+    value: 0, change_pct: 0, loan: null, life_years: null, age_years: 0, end_value: 0,
+    replace: true, replace_cost: null, replace_in_todays_dollars: true, rent_monthly: 0,
+    ...extra});
+  /** The fixture plus some property. */
+  function withProps(...props: Property[]): {d: Data; s: Settings} {
+    const p = payload();
+    p.properties = props;
+    const d = new Data(p);
+    return {d, s: defaults(d)};
+  }
+
+  it('amortizes a loan: payoff month, balance and interest left', () => {
+    const l = loan(300000, 6, 2000);
+    const n = -Math.log(1 - 0.005 * 300000 / 2000) / Math.log(1.005);    // 277.9 months
+    expect(loanMonths(l)).toBe(Math.ceil(n));
+    expect(loanBalance(l, 0)).toBe(300000);
+    expect(loanBalance(l, 12)).toBeCloseTo(300000 * 1.005 ** 12 - 2000 * (1.005 ** 12 - 1) / 0.005,
+                                           6);
+    expect(loanBalance(l, loanMonths(l))).toBe(0);
+    expect(loanInterest(l)).toBeCloseTo(2000 * n - 300000, 0);
+    const flat = loan(12000, 0, 500);
+    expect([loanMonths(flat), loanBalance(flat, 12), loanInterest(flat)]).toEqual([24, 6000, 0]);
+    expect(loanMonths(loan(0, 5, 100))).toBe(0);
+  });
+
+  it('grows a home by its rate and takes the loan off for equity', () => {
+    const home = prop({value: 500000, change_pct: 3, loan: loan(12000, 0, 500)});
+    expect(propertyValue(home, 10, 3)).toBeCloseTo(500000 * 1.03 ** 10, 6);
+    expect(propertyEquity(home, 1, 3)).toBeCloseTo(500000 * 1.03 - 6000, 6);
+    expect(propertyEquity(home, 5, 3)).toBeCloseTo(500000 * 1.03 ** 5, 6);    // paid off
+  });
+
+  it('runs a car down to its end value, then replaces it at an inflated price', () => {
+    const car = prop({type: 'car', value: 20000, life_years: 12, age_years: 4, end_value: 3000,
+                      replace_cost: 35000});
+    expect(propertyValue(car, 0, 3)).toBe(20000);
+    expect(propertyValue(car, 4, 3)).toBeCloseTo(20000 * (3000 / 20000) ** 0.5, 6);
+    expect(propertyValue(car, 8, 3)).toBeCloseTo(3000, 6);
+    const g = 1.03 ** 8;
+    expect(propertyValue(car, 14, 3)).toBeCloseTo(35000 * g * (3000 / 35000) ** 0.5, 6);
+    expect(propertyValue(car, 20, 3)).toBeCloseTo(35000 * 1.03 ** 20, 6);   // third one
+    expect(propertyValue({...car, replace: false}, 14, 3)).toBe(3000);
+    expect(propertyValue({...car, end_value: 0}, 4, 3)).toBe(10000);         // straight line
+    expect(replaceMo(car, 3)).toBeCloseTo((35000 - 3000) / 12 / 12, 9);
+    expect(replaceMo({...car, replace: false}, 3)).toBe(0);
+  });
+
+  it('takes an actual future price as it is, and brings it back to today for the set-aside', () => {
+    const car = prop({type: 'car', value: 20000, life_years: 12, age_years: 4, end_value: 3000,
+                      replace_cost: 45000, replace_in_todays_dollars: false});
+    expect(propertyValue(car, 8.0001, 3)).toBeCloseTo(45000, -1);           // no inflation added
+    expect(propertyValue(car, 20, 3)).toBeCloseTo(45000 * 1.03 ** 12, 6);   // later ones grow
+    expect(replaceMo(car, 3)).toBeCloseTo((45000 / 1.03 ** 8 - 3000) / 12 / 12, 9);
+  });
+
+  it('puts a replacement in the annual expenses and rent in income', () => {
+    const car = prop({id: 'car', name: 'Car', type: 'car', value: 20000, life_years: 12,
+                      age_years: 4, end_value: 3000, replace_cost: 35000});
+    const flat = prop({id: 'flat', name: 'Flat', type: 'rental', value: 300000,
+                       rent_monthly: 1000});
+    const {d, s} = withProps(car, flat);
+    expect(replaceYear(d, car)).toBe(2034);                  // March 2026 + 8 years
+    expect(s.st.annual.at(-1)).toEqual({name: 'Replace Car', amt: Math.round((35000 - 3000) / 12)});
+    expect(annualComparableMo(d, s.st)).toBe(annualMo(s.st) - Math.round((35000 - 3000) / 12) / 12);
+    expect(s.st.inc['prop:flat']).toBe(1000);
+    expect(settingLabel(d, ['st', 'inc', 'prop:flat'])).toBe('Rent, Flat');
+    expect(budget(d, s.st).income).toBe(14000);
+    expect(incomeAt(d, s, 2030)).toBe(14000);
+    const ry = retireYear(d, s.rs);
+    const R = retirementIncome(d, s, s.rs.age);
+    expect(R.parts.find((x) => x.kind === 'rent')?.value).toBe(1000);
+    const others = sum(R.parts.filter((x) => x.kind !== 'rent' && (x.kind !== 'ss' ||
+        ry >= (x.start ?? 0))).map((x) => x.value));
+    expect(incomeAt(d, s, ry)).toBeCloseTo((others + 1000) * 0.88, 6);  // rent is taxed once retired
+  });
+
+  it('drops a paid-off loan from its spending category', () => {
+    // 4800 at 0% for 200/mo: paid off 24 months after March 2026 (2028.17)
+    const {d, s} = withProps(prop({value: 1, loan: loan(4800, 0, 200, 'Shopping')}));
+    expect(spendAt(d, s, 2027).cats.Shopping).toBe(500);
+    expect(spendAt(d, s, 2028).cats.Shopping).toBeCloseTo(500 - 200 * (2029 - (2026 + 2 / 12 + 2)), 9);
+    expect(spendAt(d, s, 2029).cats.Shopping).toBe(300);
+    const y = withProps(prop({value: 1, loan: loan(4800, 0, 200, 'Income tax')}));
+    expect(spendAt(y.d, y.s, 2029).annual).toBe(annualMo(y.s.st) - 200);
   });
 });
 
