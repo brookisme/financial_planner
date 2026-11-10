@@ -7,16 +7,16 @@
 
 import {$, $in, app, changed, hideTip, num, onChange, showTip} from '../app';
 import {esc, fk, fmt, niceStep, sum} from '../format';
-import {ageWhen, budget, clone, drawPct, type IncomePart, overflowTarget, retirementIncome,
-        retirementSavings, retireSavings, retireYear, spendAt, spendToday,
+import {ageWhen, budget, clone, drawPct, type IncomePart, overflowTarget, propertyEquity,
+        retirementIncome, retirementSavings, retireSavings, retireYear, spendAt, spendToday,
         ssFactor} from '../model';
+import {buildFolds} from './folds';
 import {presetPicker} from './presets';
 
 //
 // CONSTANTS
 //
 const TABLE_AGES = [55, 58, 60, 62, 65, 67, 70];
-const FOLD_KEY = 'fp-retire-folded';
 
 //
 // PUBLIC
@@ -38,7 +38,7 @@ export function buildRetire(): void {
   buildOthers();
   buildPanels();
   buildAssumptions();
-  buildFolds();
+  buildFolds($('r-side'), $('r-fold-all'), 'fp-retire-folded');
   ra.addEventListener('input', () => {
     app.S.rs.age = +ra.value;
     changed();
@@ -142,6 +142,7 @@ function partColor(x: IncomePart): string {
   if (x.kind === 'pension') return '--r1';
   if (x.kind === 'investment') return '--r5';
   if (x.kind === 'savings') return '--onetime';
+  if (x.kind === 'rent') return '--avg';
   if (x.kind === 'ss') return '--r4';
   return x.partner === app.d.primary.id ? '--r2' : '--r3';
 }
@@ -203,9 +204,12 @@ function buildPanels(): void {
       const key = `${p.id}:${i}`;
       h += `<div class="panel" data-pane="acct|${esc(key)}|on"><label class="toggle"><input
         type="checkbox" data-r="acct|${esc(key)}|on"><h3>${esc(ac.name)} <span class="small muted">${
-        esc(p.name)}</span></h3></label>${numInput(`acct|${key}|bal`, 'Balance today', 1000, true)}${
-        numInput(`acct|${key}|monthly`, 'Adding per month')}${drawCtl(`acct:${key}`)}<p
-        class="small muted">Grows at the return rate; contributions continue until retirement.</p></div>`;
+        esc(p.name)}</span></h3></label>${numInput(`acct|${key}|bal`, 'Balance today', 1000, true)}
+        <div class="row"><span>Adding per month</span><span><span class="num" id="r-ac-${
+          esc(key)}"></span> <a class="small" href="#budget">set in Budgeting</a></span></div>${
+        drawCtl(`acct:${key}`)}<p class="small muted">${ac.pre_tax ? 'Pre-tax, from pay' :
+        'Post-tax, from take-home'}. Grows at the return rate; contributions stop when ${
+        esc(p.name)} retires.</p></div>`;
     });
   });
   d.p.investments.forEach((v) => {
@@ -258,60 +262,6 @@ function buildPanels(): void {
   });
 }
 
-/**
- * Makes every card in the right column collapsible to its title line (so a change in a lower
- * card is visible in the chart without scrolling). Folded cards are remembered in this browser.
- */
-function buildFolds(): void {
-  const side = $('r-side');
-  const panels = [...side.querySelectorAll<HTMLElement>('.panel')];
-  let folded = new Set<string>();
-  try {
-    folded = new Set(JSON.parse(localStorage.getItem(FOLD_KEY) ?? '[]') as string[]);
-  } catch {
-    // storage unavailable: start with everything open
-  }
-  const keyOf = (el: HTMLElement) => el.querySelector('h3')?.textContent?.trim() ?? '';
-  const store = () => {
-    try {
-      localStorage.setItem(FOLD_KEY, JSON.stringify([...folded]));
-    } catch {
-      // not remembered, which is fine
-    }
-  };
-  const set = (el: HTMLElement, on: boolean) => {
-    el.classList.toggle('folded', on);
-    const b = el.querySelector<HTMLButtonElement>(':scope > .fold')!;
-    b.setAttribute('aria-expanded', String(!on));
-    b.textContent = on ? '▸' : '▾';
-    if (on) folded.add(keyOf(el));
-    else folded.delete(keyOf(el));
-  };
-  const allBtn = $('r-fold-all');
-  const markAll = () => {
-    allBtn.textContent = panels.every((p) => p.classList.contains('folded')) ? 'Expand Settings' :
-        'Collapse Settings';
-  };
-  panels.forEach((el) => {
-    el.classList.add('foldable');
-    el.insertAdjacentHTML('afterbegin', `<button class="fold" type="button" aria-expanded="true"
-      aria-label="Show or hide ${esc(keyOf(el))}">▾</button>`);
-    set(el, folded.has(keyOf(el)));
-    el.querySelector(':scope > .fold')!.addEventListener('click', () => {
-      set(el, !el.classList.contains('folded'));
-      store();
-      markAll();
-    });
-  });
-  allBtn.addEventListener('click', () => {
-    const fold = allBtn.textContent === 'Collapse Settings';
-    panels.forEach((el) => set(el, fold));
-    store();
-    markAll();
-  });
-  markAll();
-}
-
 /** Raises, presets and the rate sliders. */
 function buildAssumptions(): void {
   const d = app.d;
@@ -360,16 +310,26 @@ function drawRetire(): void {
   });
   markPreset();
   const tot = retirementSavings(d, S);
+  const RY = retireYear(d, rs);
+  const eqR = sum(d.props.map((x) => propertyEquity(x, Math.max(0, RY - d.todayT), rs.inf)));
   $('r-totals').innerHTML = `<div><span class="eyebrow">Put in by retirement</span><span
     class="v num">${fmt(tot.invested)}</span><span class="small muted">balances today plus every
     contribution until ${tot.year - 1}</span></div><div><span class="eyebrow">Estimated total at
     retirement</span><span class="v num">${fmt(tot.total)}</span><span class="small muted">with
-    returns, in ${tot.year - 1} dollars · ${fmt(tot.today)} in today's dollars</span></div>`;
+    returns, in ${tot.year - 1} dollars · ${fmt(tot.today)} in today's dollars</span></div>` +
+      (d.props.length ? `<div><span class="eyebrow">Property equity at retirement</span><span
+        class="v num">${fmt(eqR)}</span><span class="small muted">value minus loans, in ${
+        RY - 1} dollars · <a href="#property">Property</a></span></div>` : '');
   document.querySelectorAll<HTMLElement>('[data-drawv]').forEach((el) => {
     const key = el.dataset.drawv!;
     el.textContent = `${drawPct(rs, key)}%`;
     const r = document.querySelector<HTMLInputElement>(`[data-r="draw|${CSS.escape(key)}"]`);
     if (r && document.activeElement !== r) r.value = String(drawPct(rs, key));
+  });
+  d.accounts.forEach((x) => {
+    const own = budget(d, S.st).amt[x.key] ?? 0;
+    $(`r-ac-${x.key.slice(5)}`).textContent = fmt(own) + (x.acct.employer_monthly ?
+      ` + ${fmt(x.acct.employer_monthly)} employer` : '');
   });
   retireSavings(d).forEach((sv) => {
     $(`r-sc-${sv.id}`).textContent = fmt(budget(d, S.st).amt[`sav:${sv.id}`] ?? 0);
@@ -441,7 +401,8 @@ function drawRetire(): void {
   const kinds: Array<[string, string]> = [];
   R.parts.forEach((x) => {
     const lbl = x.kind === 'pension' ? 'Pensions' : x.kind === 'investment' ? 'Investments' :
-        x.kind === 'savings' ? 'Savings' : x.kind === 'ss' ? 'Social Security' :
+        x.kind === 'savings' ? 'Savings' : x.kind === 'rent' ? 'Rent' :
+        x.kind === 'ss' ? 'Social Security' :
         x.partner === d.primary.id ? `${d.primary.name}'s accounts` : 'Other accounts';
     if (!kinds.some(([l]) => l === lbl)) kinds.push([lbl, partColor(x)]);
   });
@@ -479,7 +440,7 @@ function drawChart(today: number): void {
     g += `<line class="grid" x1="${L}" x2="${W - Rr}" y1="${y(v)}" y2="${y(v)}"/><text x="${
         L - 8}" y="${y(v) + 4}" text-anchor="end">${fk(v)}</text>`;
   }
-  const order = ['pension', 'account', 'investment', 'savings', 'ss'];
+  const order = ['pension', 'account', 'investment', 'savings', 'rent', 'ss'];
   ages.forEach((x, i) => {
     const bx = L + i * bw + bw * 0.16;
     const w = bw * 0.68;
@@ -535,10 +496,10 @@ function drawTable(): void {
   const ages = TABLE_AGES.filter((a) => a >= lo && a <= hi);
   if (!ages.includes(S.rs.age)) ages.push(S.rs.age);
   ages.sort((a, b) => a - b);
-  const kinds = ['pension', 'account', 'investment', 'savings', 'ss'].filter((k) =>
+  const kinds = ['pension', 'account', 'investment', 'savings', 'rent', 'ss'].filter((k) =>
       retirementIncome(d, S, S.rs.age).parts.some((p) => p.kind === k));
   const names: Record<string, string> = {pension: 'Pensions', account: 'Accounts',
-    investment: 'Investments', savings: 'Savings', ss: 'Soc. Sec.'};
+    investment: 'Investments', savings: 'Savings', rent: 'Rent', ss: 'Soc. Sec.'};
   $('rtable').innerHTML = `<tr>${d.partners.map((p) => `<th>${esc(p.name)}</th>`).join('')}<th>Year</th>${
       kinds.map((k) => `<th>${names[k]}</th>`).join('')}<th>After tax</th><th>Once SS starts</th><th>Projected spending</th><th>vs spending, long run</th></tr>` +
       ages.map((a) => {
