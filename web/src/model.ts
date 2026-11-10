@@ -95,11 +95,13 @@ export class Data {
     return this.credits.filter((i) => this.cats[i].offsets === name);
   }
 
-  /** Whether a credit is shown inside the planner table (not nested under a cost toggle). */
+  /**
+   * Whether a credit is planned in budgets (it reduces spending). Credits against 1-time or
+   * emergency costs are not: budgets have no line for those costs.
+   */
   isPlannerCredit(i: number): boolean {
-    const off = this.cats[i].offsets;
-    const k = this.cats[this.idx(off ?? '')]?.kind;
-    return !off || !COST_KINDS.includes(k as CostKind);
+    const k = this.cats[this.idx(this.cats[i].offsets ?? '')]?.kind;
+    return k !== 'one_time' && k !== 'emergency';
   }
 
   /** Emergency funds (they pay for emergency costs, in config order). */
