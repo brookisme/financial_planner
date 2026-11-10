@@ -16,6 +16,7 @@ import {annualMo} from '../model';
 import type {PlannerState, Tx} from '../types';
 import {budgetChoices, budgetSt, stripView} from './budgets';
 import {openRuleDialog} from './categorize';
+import {refreshStrip} from './strip';
 
 //
 // CONSTANTS
@@ -218,12 +219,13 @@ function vsCell(actual: number, plan: number|null, moneyIn = false): string {
   return `<td class="num ${good ? 'pos' : 'neg'}">${pct > 0 ? '+' : '−'}${Math.abs(pct)}%</td>`;
 }
 
-/** Redraws everything that follows the period. */
+/** Redraws everything that follows the period, including the Actuals summary row. */
 function refresh(): void {
   markView();
   buildTable();
   drawChart();
   drawDetail();
+  refreshStrip();
 }
 
 /** Sets the spending / credits / both mode. */
