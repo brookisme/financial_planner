@@ -12,7 +12,7 @@
 
 import {$, $in, app, hideTip, showTip} from '../app';
 import {esc, fk, fmt, niceStep, sum} from '../format';
-import {annualMo} from '../model';
+import {annualComparableMo} from '../model';
 import type {PlannerState, Tx} from '../types';
 import {budgetChoices, budgetSt, stripView} from './budgets';
 import {openRuleDialog} from './categorize';
@@ -387,7 +387,8 @@ function buildTable(): void {
     // vs budget compares like for like: regular + annual costs (no 1-time, emergency or savings)
     // minus the credits a budget plans for
     const planCred = credCount.filter((c) => d.isPlannerCredit(c));
-    const plan = st ? (planSum(d.regular) ?? 0) + annualMo(st) - (planSum(planCred) ?? 0) : null;
+    const plan = st ? (planSum(d.regular) ?? 0) + annualComparableMo(d, st) -
+        (planSum(planCred) ?? 0) : null;
     const like = series(counted.filter((c) => ['spending', 'annual'].includes(d.cats[c].kind)));
     const likeCred = series(planCred);
     h += totalRow(mode === 'both' ? 'Net (ticked)' : 'Total (ticked)',
@@ -506,7 +507,7 @@ function drawChart(): void {
   const st = attached();
   const monthly = !st ? null : selCat !== null ? planned(st, selCat) : mode === 'cred' ?
       sum(credCats.map((c) => planned(st, c) ?? 0)) :
-      sum(d.regular.map((c) => planned(st, c) ?? 0)) + annualMo(st);
+      sum(d.regular.map((c) => planned(st, c) ?? 0)) + annualComparableMo(d, st);
   const days = dayMonth !== null ? cols.length : 1;
   const bud = monthly === null ? null : monthly / days;
   leg += `<span><i class="ln"></i>${avgName} ${fmt(avg)}/${unit}</span>` +
