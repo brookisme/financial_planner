@@ -13,7 +13,7 @@ import {renderCategorizeTab} from './categorize';
 // CONSTANTS
 //
 const TABS: Array<[string, string]> = [['household', 'Household'], ['money', 'Savings & income'],
-  ['assumptions', 'Assumptions'], ['sources', 'Data sources'], ['categories', 'Categories'],
+  ['property', 'Property'], ['assumptions', 'Assumptions'], ['sources', 'Data sources'], ['categories', 'Categories'],
   ['categorize', 'Categorize'], ['share', 'Share plan']];
 const KINDS: Array<[string, string]> = [['spending', 'Regular'], ['annual', 'Annual expense'],
   ['one_time', '1-time purchase'], ['emergency', 'Emergency fund cost'],
@@ -85,7 +85,8 @@ let dirty = false;
 function renderTab(): void {
   const body = document.getElementById('st-body')!;
   const render: Record<string, (el: HTMLElement) => void> = {
-    household: renderHousehold, money: renderMoney, assumptions: renderAssumptions,
+    household: renderHousehold, money: renderMoney, property: renderProperty,
+    assumptions: renderAssumptions,
     sources: renderSources, categories: renderCategories, share: renderShare,
     categorize: (el) => renderCategorizeTab(el, () => {
       dirty = true;
@@ -325,7 +326,10 @@ function partnerForm(i: number|null, partners: Dict[], saveHH: () => Promise<voi
             'optional: grows the benefit after the last age');
   const accountRow = (r: Dict = {}) => input('name', 'Account', r.name ?? '401(k)') +
       input('balance', 'Balance today', r.balance ?? 0, 'number') +
-      input('monthly', 'Added per month', r.monthly ?? 0, 'number');
+      check('pre_tax', 'Pre-tax', r.pre_tax ?? true) +
+      contribFields(r, '', 'Your contribution') +
+      input('employer_monthly', 'Employer adds per month', r.employer_monthly ?? 0, 'number',
+            'A match, on top');
   const html = `<div class="fgrid">
       ${input('name', 'Name', p.name, 'text', 'A generic name is safest, e.g. Partner A')}
       ${input('age', 'Age', p.age, 'number')}
@@ -356,7 +360,12 @@ function partnerForm(i: number|null, partners: Dict[], saveHH: () => Promise<voi
         if (r.service_years_now !== undefined) out.service_years_now = r.service_years_now;
         return out;
       }),
-      accounts: readRows(form, 'accounts')};
+      accounts: readRows(form, 'accounts').map((r) => {
+        const out = contribOut(r);
+        if (!out.employer_monthly) delete out.employer_monthly;
+        if (out.pre_tax) delete out.pre_tax;         // the default
+        return out;
+      })};
     if (!top.take_home_note) delete next.take_home_note;
     if (top.retirement_age === undefined || top.retirement_age === '') delete next.retirement_age;
     const list = partners.slice();
@@ -459,6 +468,88 @@ function renderMoney(el: HTMLElement): void {
         const out = contribOut(r);
         if (!out.overflow_to || out.max_balance === undefined) delete out.overflow_to;
         return out;
+      })));
+      report(msg);
+    } catch (err) {
+      report(msg, err);
+    }
+  });
+}
+
+// ---------- property ----------
+
+/** Homes, cars, rentals and other property, each with an optional loan and lifetime. */
+function renderProperty(el: HTMLElement): void {
+  const props = section<Dict[]>('properties', []);
+  const cats = section<Dict[]>('categories', []).filter((c) =>
+    ['spending', 'annual'].includes(String(c.kind ?? 'spending')));
+  const catOpts: Array<[string, string]> = [['', 'None'],
+    ...cats.map((c): [string, string] => [String(c.name), String(c.name)])];
+  const row = (r: Dict = {}) => {
+    const loan = (r.loan ?? {}) as Dict;
+    const head = (t: string, note: string) => `<span class="item-head"><b>${t}</b> ${note}</span>`;
+    return input('name', 'Name', r.name ?? 'Home') +
+      select('type', 'Type', [['home', 'Home'], ['car', 'Car'], ['rental', 'Rental'],
+                              ['other', 'Other']], r.type ?? 'home') +
+      input('value', 'Worth today', r.value ?? 0, 'number') +
+      input('change_pct', 'Yearly change in value (%)', r.change_pct ?? 0, 'number',
+            'e.g. 3 for a home; negative loses value. Not used with a lifetime') +
+      head('Loan', 'optional: mortgage or car loan') +
+      input('loan.balance', 'Owed today', loan.balance ?? '', 'number',
+            'Empty: no loan') +
+      input('loan.rate_pct', 'Interest rate (%)', loan.rate_pct ?? '', 'number') +
+      input('loan.payment_monthly', 'Payment per month', loan.payment_monthly ?? '',
+            'number') +
+      select('loan.category', 'Paid from category', catOpts, loan.category ?? '',
+             'Projections drop the payment from it once paid off') +
+      head('Lifetime', 'optional: something that wears out, like a car') +
+      input('life_years', 'Lifetime (years)', r.life_years ?? '', 'number',
+            'Empty: no lifetime') +
+      input('age_years', 'Age today (years)', r.age_years ?? 0, 'number') +
+      input('end_value', 'Worth at the end of its life', r.end_value ?? 0, 'number') +
+      check('replace', 'Replace it at the end of its life', r.replace ?? true) +
+      input('replace_cost', 'Replacement cost', r.replace_cost ?? '', 'number',
+            'Empty: what it\'s worth today') +
+      select('replace_in_todays_dollars', 'That cost is', [
+        ['true', 'Today\'s price (grows with inflation)'],
+        ['false', 'The actual price then (as entered)']],
+      String(r.replace_in_todays_dollars ?? true)) +
+      head('Rental', '') +
+      input('rent_monthly', 'Rent per month, after its costs', r.rent_monthly ?? 0, 'number',
+            'A rental: counts as income');
+  };
+  el.innerHTML = `<div class="panel form">
+      <h3>Property</h3><p class="small muted">Homes, cars, rentals and other things you own. A
+        loan's payoff date comes from its balance, rate and payment. Something with a lifetime
+        loses value down to its end value; if it's replaced, Budgeting gets a yearly "Replace …"
+        annual expense to set the money aside. Rent is income, before and after retiring. See the
+        Property section of the page.</p>
+      ${listEditor('properties', props, row, '+ Add property')}
+      <div class="btns"><button class="btn primary" type="button" id="pr-save">Save</button></div>
+      <p class="msg" id="pr-msg"></p></div>`;
+  wireLists(el, {properties: () => row()});
+  el.querySelector('#pr-save')!.addEventListener('click', async () => {
+    const msg = el.querySelector('#pr-msg');
+    try {
+      await save('properties', mergeIds(props, readRows(el, 'properties').map((r) => {
+        const loan = r.loan as Dict|undefined;
+        if (!loan || !loan.balance) delete r.loan;
+        else if (!loan.category) delete loan.category;
+        if (r.life_years === undefined) {
+          delete r.age_years;
+          delete r.end_value;
+          delete r.replace_cost;
+          delete r.replace_in_todays_dollars;
+          delete r.replace;
+        } else {
+          delete r.change_pct;            // not used with a lifetime
+          if (r.replace) delete r.replace;   // the default
+          if (r.replace_in_todays_dollars === 'false') r.replace_in_todays_dollars = false;
+          else delete r.replace_in_todays_dollars;
+        }
+        if (!r.rent_monthly) delete r.rent_monthly;
+        if (!r.change_pct) delete r.change_pct;
+        return r;
       })));
       report(msg);
     } catch (err) {
