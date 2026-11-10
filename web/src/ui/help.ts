@@ -21,8 +21,8 @@ const BODY = `
     number to try a change. Changed boxes turn blue.</li>
   <li><b>Save it.</b> Name it in the Budgets bar and click <i>Save as new</i>. Pick any saved
     budget (or the 12-mo avg) in the Compare column to see the difference line by line.</li>
-  <li><b>Check yourself against it.</b> At the top, compare the actual last 12 months with a
-    budget, or attach a budget to the Spending chart.</li>
+  <li><b>Check yourself against it.</b> At the top, compare the Actuals (the period on the
+    Spending chart) with a budget, or attach a budget to the Spending chart.</li>
   <li><b>Look at the long view.</b> <i>Retirement</i> shows income at each retirement age.
     <i>Spending over time</i> shows how costs change as children leave home.</li>
 </ol>
@@ -52,8 +52,10 @@ const BODY = `
 
 <h3 id="h-strip">Summary rows</h3>
 <ul>
-  <li>The first row is always <b>the last 12 months, actual</b>: income, spending, savings,
-    annual expenses and what's left over. On its right, <i>Compare with</i> a budget (or the
+  <li>The first row is always the <b>Actuals</b> for the period selected on the Spending chart
+    (change the period or drag across months and it follows): income, spending, savings,
+    annual expenses and what's left over. Its spending counts every credit (money that really came
+    in), ticked or not. On its right, <i>Compare with</i> a budget (or the
     12-mo avg) to see whether you were over (red) or under (green) it.</li>
   <li><b>+ Show a budget</b> adds a row for any saved budget, or your current edits. Budget rows are
     dashed and say <i>planned</i>; × hides one.</li>
