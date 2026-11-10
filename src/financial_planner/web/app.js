@@ -3134,7 +3134,10 @@
   <tr><td>Assumptions</td><td>Titles, how many months to average, retirement and college
     assumptions and presets.</td></tr>
   <tr><td>Data sources</td><td>One per kind of CSV export. Pick the file, click <i>Read columns</i>,
-    check the date, description and amount columns, then <i>Preview</i>.</td></tr>
+    check the date, description and amount columns, then <i>Preview</i>. <i>+ Add Amazon
+    export</i> takes Amazon's data export (.zip) so each item gets its own category: tick the
+    cards in the plan, and the bank's own Amazon charges are set aside so nothing counts twice.
+    The Amazon card shows how close the itemized total is to the bank's.</td></tr>
   <tr><td>Categories</td><td>Names, kinds (regular, annual expense, 1-time purchase, emergency fund
     cost, credit, ignore), planner groups and
     how each changes when the kids leave or you retire.</td></tr>
@@ -4566,21 +4569,112 @@
       <p class="small muted">CSV files live in the plan's <span class="mono">data</span> folder: ${cfg.files.length ? cfg.files.map((f) => `<span class="mono">${esc(f)}</span>`).join(", ") : "none yet"}.</p>
       <div class="cards">${sources.map((s, i) => `<div class="card"><b>${esc(s.name)}</b>
         <span class="small mono">${esc([s.files].flat().join(", "))}</span>
-        <span class="small muted">date "${esc(s.date?.column)}", ${esc(describe(s))}</span>
+        <span class="small muted">${s.kind === "amazon" ? `Amazon export \xB7 ${s.cards?.length ? `cards ${esc(s.cards.join(", "))}` : "every card"}</span><span class="small" data-amazon-check>` : `date "${esc(s.date?.column)}", ${esc(describe(s))}`}</span>
         <div class="card-actions"><button class="btn sm" type="button" data-edit="${i}">Edit</button>
           <button class="btn sm danger" type="button" data-rm="${i}">Remove</button></div></div>`).join("")}
-        <button class="card btn add" type="button" id="add-src" style="place-content:center;min-height:110px">+ Add data source</button></div>
+        <button class="card btn add" type="button" id="add-src" style="place-content:center;min-height:110px">+ Add data source</button>
+        ${sources.some((s) => s.kind === "amazon") ? "" : `<button class="card btn add" type="button"
+          id="add-amazon" style="place-content:center;min-height:110px">+ Add Amazon export</button>`}</div>
+      <p class="small muted">An <b>Amazon export</b> lists every item you bought, so Amazon
+        charges can be split into real categories instead of one lump. Request it at amazon.com \u203A
+        Account \u203A <i>Request your data</i> (<i>Your Orders</i>); it arrives as a .zip.</p>
       <p class="msg" id="src-msg"></p></div>`;
     const msg = el.querySelector("#src-msg");
     el.querySelector("#add-src").addEventListener("click", () => sourceForm(null, sources));
+    el.querySelector("#add-amazon")?.addEventListener("click", () => amazonForm(null, sources));
     el.querySelectorAll("[data-edit]").forEach((b) => b.addEventListener(
       "click",
-      () => sourceForm(+b.dataset.edit, sources)
+      () => sources[+b.dataset.edit].kind === "amazon" ? amazonForm(+b.dataset.edit, sources) : sourceForm(+b.dataset.edit, sources)
     ));
+    const check2 = el.querySelector("[data-amazon-check]");
+    if (check2) {
+      check2.textContent = "Checking against the bank\u2026";
+      get("/api/amazon/check").then(({ rows }) => {
+        const t = rows[rows.length - 1];
+        check2.textContent = !t ? "" : !t.bank ? `Itemized ${fmt(t.items)}; no bank Amazon charges set aside yet.` : `Itemized ${fmt(t.items)} vs ${fmt(t.bank)} on the bank side (${t.diff >= 0 ? "+" : "\u2212"}${Math.abs(100 * t.diff / t.bank).toFixed(1)}%)`;
+      }, () => check2.textContent = "");
+    }
     el.querySelectorAll(".card [data-rm]").forEach((b) => confirmClick(b, () => {
       sources.splice(+b.dataset.rm, 1);
       save2("sources", sources).then(() => renderTab(), (err) => report(msg, err));
     }));
+  }
+  function amazonForm(i, sources) {
+    const s = i === null ? { name: "Amazon", kind: "amazon", files: "data/amazon" } : sources[i];
+    const chosen = new Set(s.cards ?? []);
+    let scan = null;
+    const html = `<div class="fgrid">
+      ${input("name", "Name", s.name)}
+      ${input(
+      "files",
+      "Folder",
+      [s.files].flat()[0],
+      "text",
+      "Where the exports are kept, one folder per person"
+    )}
+      ${input("who", "Whose export is it?", "", "text", "e.g. Partner A", "data-optional")}
+      <label class="field"><span>Add an export (.zip from Amazon)</span><input type="file"
+        id="az-up" accept=".zip,application/zip"><span class="hint">Only its CSV files are kept
+        (not the delivery photos)</span></label>
+    </div>
+    <p class="small muted" id="az-exports"></p>
+    <div id="az-cards"></div>
+    ${check("setaside", "Set aside the bank's Amazon charges (not Prime or AWS) so they aren't counted twice", true)}
+    <p class="small muted">Then sort the items into categories with rules on <i>source:
+      ${esc(s.name)}</i> in Settings \u203A Categorize (Amazon's department is the bank category).</p>`;
+    formDialog(i === null ? "Add Amazon export" : `Edit ${s.name}`, html, async (form2) => {
+      const f = readFields(form2);
+      const cards = [...form2.querySelectorAll("[data-card]:checked")].map((x) => x.dataset.card);
+      const entry = { name: f.name, kind: "amazon", files: f.files || "data/amazon" };
+      if (cards.length) entry.cards = cards;
+      const list = sources.slice();
+      if (i === null) list.push(entry);
+      else list[i] = entry;
+      await save2("sources", list);
+      if (f.setaside && scan) {
+        const cats = section("categories", []);
+        if (!cats.some((c) => c.name === scan.category)) {
+          await save2("categories", [...cats, { name: scan.category, kind: "ignore" }]);
+        }
+        const rules = section("rules", []);
+        const missing = scan.rules.filter((r) => !rules.some((x) => x.category === r.category && x.source === r.source));
+        if (missing.length) await save2("rules", [...missing, ...rules]);
+      }
+      sources.splice(0, sources.length, ...list);
+    });
+    const form = document.getElementById("fd-body");
+    const folder = () => form.querySelector('[data-k="files"]').value.trim() || "data/amazon";
+    const rescan = async () => {
+      const box = form.querySelector("#az-cards");
+      try {
+        scan = await get(`/api/amazon/scan?folder=${encodeURIComponent(folder())}`);
+      } catch (err) {
+        scan = null;
+        box.innerHTML = `<p class="small muted">${esc(err.message)}. Add an export
+        above.</p>`;
+        return;
+      }
+      form.querySelector("#az-exports").textContent = scan.exports.length ? `Exports: ${scan.exports.join(", ")}.` : "No exports in this folder yet.";
+      const known = scan.cards.filter((c) => c.card !== "unknown");
+      box.innerHTML = !scan.cards.length ? "" : `<p class="small"><b>Cards</b>: tick the ones
+      whose statements are in this plan (${esc(scan.first)} to ${esc(scan.last)}). A reissued
+      card has a new number; match the dates.</p><div class="listed">${known.map((c) => `<label class="field check"><input type="checkbox" data-card="${esc(c.card)}"${!chosen.size || chosen.has(c.card) ? " checked" : ""}>\u2022\u2022\u2022\u2022 ${esc(c.card)} \xB7 ${fmt(c.purchases)} in ${c.rows} rows, ${esc(c.first)} to ${esc(c.last)}</label>`).join("")}</div>${scan.cards.some((c) => c.card === "unknown") ? '<p class="small muted">Items with no card (mostly digital orders) are always kept.</p>' : ""}`;
+    };
+    form.querySelector('[data-k="files"]').addEventListener("change", rescan);
+    form.querySelector("#az-up").addEventListener("change", async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const who = form.querySelector('[data-k="who"]').value.trim() || file.name.replace(/\.zip$/i, "");
+      const out = form.querySelector("#az-exports");
+      out.textContent = "Unpacking\u2026";
+      try {
+        await upload(`/api/amazon/upload?name=${encodeURIComponent(who)}&folder=${encodeURIComponent(folder())}`, file);
+        await rescan();
+      } catch (err) {
+        out.textContent = err.message;
+      }
+    });
+    rescan();
   }
   function sourceForm(i, sources) {
     const s = i === null ? { name: `Account ${sources.length + 1}` } : sources[i];
