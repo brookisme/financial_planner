@@ -143,7 +143,7 @@ button.btn.primary,a.btn.primary{background:var(--ink);color:var(--bg);border-co
 #pr-totals{margin-bottom:18px}
 .r-totals .v{font-size:22px}
 @media (max-width:520px){.r-totals{grid-template-columns:1fr}.r-totals>div+div{border-left:0;border-top:1px solid var(--rule)}}
-.part-break{border-top:2px solid var(--ink);margin:12px 0 0}
+.app-main>section~section{border-top:1px solid var(--rule);padding-top:26px}
 .ptable.act tr.sel td{background:var(--accent-soft)}
 .ptable tr.off td{color:var(--ink3)}
 .ptable .tg{display:inline-flex;align-items:center;gap:6px}
@@ -254,6 +254,8 @@ button.btn.primary,a.btn.primary{background:var(--ink);color:var(--bg);border-co
 .sh-box:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .sb-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .sb-name{font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--rule);border-radius:8px;background:var(--bg);color:var(--ink);flex:1 1 220px;min-width:0}
+.sb-sep{align-self:stretch;width:1px;background:var(--rule);margin:2px 8px}
+@media (max-width:600px){.sb-sep{display:none}}
 .sb-name:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 button.btn:disabled{opacity:.45;cursor:default}
 .sb-toggles{display:flex;flex-wrap:wrap;gap:6px;margin-left:auto;padding-left:12px;border-left:1px solid var(--rule)}

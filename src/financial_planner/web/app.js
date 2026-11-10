@@ -2269,6 +2269,7 @@
     sel.value = cmpKey;
     if (document.getElementById("psum")?.childElementCount) update();
   }
+  var FILL_CHART = "__chart";
   var cmpKey = "avg";
   function compareSt() {
     const b = savedBudgets().find((x) => x.id === cmpKey);
@@ -2401,18 +2402,29 @@
       fillPlanner();
       changed();
     });
-    const fill = $("fill");
-    fill.addEventListener("mouseenter", () => {
-      fill.title = `Set Planned / mo to the averages for ${selectionLabel()}, the period shown in Spending`;
-    });
-    fill.addEventListener("click", () => {
+    const fillSel = $("fill-sel");
+    const fillOptions = () => {
+      fillSel.innerHTML = '<option value="">Planned / mo</option><optgroup label="Fill from">' + [[FILL_CHART, `Spending chart: ${selectionLabel()}`], ...budgetChoices()].map(([v, n]) => `<option value="${esc(v)}">${esc(n)}</option>`).join("") + "</optgroup>";
+    };
+    fillSel.addEventListener("focus", fillOptions);
+    fillSel.addEventListener("mousedown", fillOptions);
+    fillSel.addEventListener("change", () => {
+      const v = fillSel.value;
+      const from = v === FILL_CHART ? null : budgetSt(v);
+      if (!v || v !== FILL_CHART && !from) return;
+      const st = app.S.st;
       [...d.regular, ...d.credits.filter((c) => d.isPlannerCredit(c))].forEach((i) => {
-        app.S.st.plan[d.cats[i].name] = Math.round(selectionAvg(i));
+        const n = d.cats[i].name;
+        st.plan[n] = from ? from.plan[n] ?? 0 : Math.round(selectionAvg(i));
       });
+      if (from) d.credits.forEach((c) => st.on[d.cats[c].name] = !!from.on[d.cats[c].name]);
+      const what = fillSel.selectedOptions[0].textContent;
+      fillSel.value = "";
       fillPlanner();
       changed();
-      $("trim-note").textContent = `Filled from Spending: ${selectionLabel()}.`;
+      $("trim-note").textContent = `Planned / mo filled from ${what}.`;
     });
+    fillOptions();
     $("trim").addEventListener("click", () => {
       flex.forEach((i) => app.S.st.plan[d.cats[i].name] = Math.round(d.avg(i) * 0.9));
       fillPlanner();
@@ -2605,7 +2617,6 @@
   var state = { list: [], active: null };
   var pendingSwitch = null;
   var pendingDel = false;
-  var pendingReset = false;
   var stOf = (b) => rebaseBudget(app.defs.st, b.st, b.base);
   var active = () => state.list.find((b) => b.id === state.active) ?? null;
   var newId = () => `b${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -2634,7 +2645,6 @@
   function touch() {
     pendingSwitch = null;
     pendingDel = false;
-    pendingReset = false;
     renderBar();
   }
   function renderBar() {
@@ -2657,7 +2667,6 @@
     const del = $("bg-del");
     del.hidden = !a;
     del.textContent = pendingDel ? "Click again to delete" : "Delete";
-    $("bg-reset").textContent = pendingReset ? "Click again to start over" : "Start from averages";
     document.querySelectorAll("[data-bg-tabs] button").forEach((btn) => {
       btn.addEventListener("click", () => {
         const id = btn.dataset.id;
@@ -2720,17 +2729,6 @@
       state.active = null;
       persist();
       renderBar();
-    });
-    $("bg-reset").addEventListener("click", () => {
-      if (!pendingReset) {
-        pendingReset = true;
-        renderBar();
-        return;
-      }
-      pendingReset = false;
-      state.active = null;
-      persist();
-      apply(app.defs.st);
     });
   }
 
@@ -3206,8 +3204,11 @@
     makes it grow. With no emergency fund it counts as spending.</li>
   <li><b>The cards on the right</b> (income, savings, annual expenses, emergency costs) fold with
     \u25BE / \u25B8; <i>Collapse Settings</i> in the Budgets bar folds them all.</li>
-  <li><i>Fill from Spending</i> sets Planned / mo to the averages of the period shown in Spending.
-    <i>Try 10% less on flexible spending</i> trims the categories marked flexible.</li>
+  <li><b>Planned / mo</b> starts at the 12-month averages. Its column heading is a menu: fill the
+    column from the <i>Spending chart</i> (the averages of the period it shows), the 12-mo avg or
+    any saved budget. Only the planned categories and credits change, not income, savings or
+    annual expenses. <i>Try 10% less on flexible spending</i> trims the categories marked
+    flexible.</li>
 </ul>
 
 <h3 id="h-cat">Categorizing</h3>

@@ -73,28 +73,27 @@ try{var t=localStorage.getItem('fp-theme');if(t==='light'||t==='dark'){document.
     </div>
   </section>
 
-  <div class="part-break" role="separator"></div>
-
   <section id="budget">
     <div class="sec-head">
       <h2>Budgeting</h2>
       <span class="small muted" id="planner-sub">Plan each month and save it as a budget.</span>
     </div>
     <div class="panel sbar" id="budgets" aria-label="Budgets">
-      <div class="sb-row"><span class="eyebrow">Budgets</span><div class="chips" id="bg-tabs" data-bg-tabs role="group" aria-label="Saved budgets"></div><button class="btn sm fold-all" type="button" id="p-fold-all">Collapse Settings</button></div>
+      <div class="sb-row"><span class="eyebrow">Budgets</span><div class="chips" id="bg-tabs" data-bg-tabs role="group" aria-label="Saved budgets"></div></div>
       <div class="sb-row">
         <input type="text" id="bg-name" class="sb-name" placeholder="Name this budget, e.g. Less dining out" aria-label="Budget name" maxlength="60">
         <button class="btn primary" id="bg-save" type="button">Save as new</button>
         <button class="btn" id="bg-update" type="button" hidden>Update</button>
         <button class="btn" id="bg-del" type="button" hidden>Delete</button>
-        <button class="btn" id="bg-reset" type="button">Start from averages</button>
+        <span class="sb-sep" aria-hidden="true"></span>
+        <button class="btn" type="button" id="p-fold-all">Collapse Settings</button>
       </div>
       <p class="small muted" id="bg-state" data-bg-state aria-live="polite"></p>
     </div>
     <div class="planner">
       <div class="panel ptable-scroll">
         <table class="ptable">
-          <thead><tr><th>Category</th><th>Planned / mo</th><th><select id="cmp-sel" class="cmp-sel" aria-label="Compare with"></select></th><th>Difference</th></tr></thead>
+          <thead><tr><th>Category</th><th><select id="fill-sel" class="cmp-sel" aria-label="Planned / mo: fill from"></select></th><th><select id="cmp-sel" class="cmp-sel" aria-label="Compare with"></select></th><th>Difference</th></tr></thead>
           <tbody id="ptbody"></tbody>
           <tbody id="psum" class="psum"></tbody>
         </table>
@@ -104,7 +103,7 @@ try{var t=localStorage.getItem('fp-theme');if(t==='light'||t==='dark'){document.
         <div class="panel"><h3>Savings</h3><div id="sav-rows" style="display:grid;gap:14px"></div><p class="small muted" id="sav-note"></p></div>
         <div class="panel"><h3>Annual expenses</h3><div id="an-rows" class="an-rows"></div><div class="btns"><button class="btn sm add" id="an-add" type="button">+ Add</button></div><div class="row an-total"><span>Total</span><span class="num" id="an-total"></span></div></div>
         <div class="panel"><h3>Emergency fund costs</h3><div class="row"><label for="em-amt">Per month</label><input class="amt" id="em-amt" type="number" step="25" inputmode="decimal"></div><p class="small muted" id="em-note"></p></div>
-        <div class="btns"><button class="btn" id="fill" type="button">Fill from Spending</button><button class="btn" id="reset" type="button">Reset to averages</button><button class="btn" id="trim" type="button">Try 10% less on flexible spending</button></div>
+        <div class="btns"><button class="btn" id="reset" type="button">Reset to averages</button><button class="btn" id="trim" type="button">Try 10% less on flexible spending</button></div>
         <p class="small muted" id="trim-note"></p>
       </div>
     </div>
