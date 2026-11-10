@@ -9,7 +9,8 @@
 //
 const TOPICS: Array<[string, string]> = [['h-start', 'Quick start'], ['h-setup', 'Setting up'],
   ['h-strip', 'Summary rows'], ['h-explore', 'Spending'], ['h-planner', 'Budgeting'],
-  ['h-cat', 'Categorizing'], ['h-college', 'College 529s'], ['h-retire', 'Retirement'],
+  ['h-cat', 'Categorizing'], ['h-college', 'College 529s'], ['h-prop', 'Property'],
+  ['h-retire', 'Retirement'],
   ['h-future', 'Spending over time'], ['h-scen', 'Sharing'], ['h-privacy', 'Privacy'],
   ['h-faq', 'Questions']];
 const BODY = `
@@ -97,13 +98,18 @@ const BODY = `
   <li><b>Savings</b>: each 529, savings account, emergency fund and investment adds a fixed
     <b>$/mo</b>, <b>% left</b> (a share of what is left after spending, annual expenses and the
     fixed amounts, kept between an optional min and max) or <b>rest</b> (whatever is still left,
-    split evenly between every "rest" line). A savings account with a max balance sends the rest
+    split evenly between every "rest" line). Retirement accounts can use all three too. A
+    <i>pre-tax</i> one on $/mo comes out of pay before take-home, so it doesn't change the
+    left-over; on % left or rest, or a <i>post-tax</i> one, it works like any other line. An
+    employer match is added on top. A savings account with a max balance sends the rest
     to an investment once it's full; the note under it says when.</li>
   <li><b>Annual expenses</b>: add as many as you like (+ Add, a name and a yearly amount; × to
     remove). Their total ÷ 12 counts each month.</li>
   <li><b>Emergency fund costs</b>: what you expect to take out of the emergency fund each month.
     Empty means the same as what goes in, so the fund holds steady; more makes it shrink, less
     makes it grow. With no emergency fund it counts as spending.</li>
+  <li><b>The cards on the right</b> (income, savings, annual expenses, emergency costs) fold with
+    ▾ / ▸; <i>Collapse Settings</i> in the Budgets bar folds them all.</li>
   <li><i>Fill from Spending</i> sets Planned / mo to the averages of the period shown in Spending.
     <i>Try 10% less on flexible spending</i> trims the categories marked flexible.</li>
 </ul>
@@ -129,6 +135,22 @@ const BODY = `
 <p><b>Presets</b>: click one to set both sliders. <i>Edit presets</i> lets you change any label,
   return or inflation, add or remove presets (the starting ones too) or keep none. The list is
   shared by every card and saved with the plan.</p>
+
+<h3 id="h-prop">Property</h3>
+<ul>
+  <li>Set up homes, cars and rentals in <i>Settings › Property</i>. Each gets a card with what it's
+    worth, what's owed and the equity (worth minus owed) by year, in dollars of each year.</li>
+  <li><b>Loans</b>: from the balance, rate and payment you get the payoff date and the interest
+    still to pay. Pick the category the payment shows up in, and Spending over time and Retirement
+    drop it from there once it's paid off.</li>
+  <li><b>A lifetime</b> (a car): its value goes down to the end value. If it's replaced, the
+    replacement cost is either today's price (grows with inflation) or the actual price then, and
+    Budgeting gets a <i>Replace …</i> annual expense, (replacement cost in today's dollars − end
+    value) ÷ lifetime a year, to set the money aside.</li>
+  <li><b>Rent</b> from a rental is an income line in Budgeting; it continues after retiring (taxed
+    like other retirement income) and shows in the Retirement chart.</li>
+  <li>The totals show equity today and at retirement; Retirement shows the same figure.</li>
+</ul>
 
 <h3 id="h-retire">Retirement</h3>
 <ul>
