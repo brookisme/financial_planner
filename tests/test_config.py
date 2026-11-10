@@ -104,6 +104,55 @@ def test_overflow_must_name_an_investment() -> None:
                                             'overflow_to': 'nowhere'}]})
 
 
+def test_retirement_accounts_pre_and_post_tax() -> None:
+    cfg = Config.model_validate({'household': {'partners': [{'name': 'A', 'age': 40, 'accounts': [
+        {'name': '401k', 'balance': 1000, 'monthly': 500, 'employer_monthly': 250},
+        {'name': 'Roth IRA', 'pre_tax': False, 'left_pct': 10, 'max_monthly': 580}]}]}})
+    k401, roth = cfg.household.partners[0].accounts
+    assert (k401.pre_tax, k401.monthly, k401.employer_monthly) == (True, 500, 250)
+    assert (roth.pre_tax, roth.left_pct, roth.max_monthly) == (False, 10, 580)
+    k401 = Config.model_validate({'household': {'partners': [{'name': 'A', 'age': 40, 'accounts': [
+        {'name': '401k', 'rest': True}]}]}}).household.partners[0].accounts[0]
+    assert (k401.pre_tax, k401.rest) == (True, True)
+
+
+def test_properties_with_loans_and_lifetimes() -> None:
+    cfg = Config.model_validate({
+        'categories': [{'name': 'Mortgage'}, {'name': 'Car'}],
+        'properties': [
+            {'name': 'House', 'value': 500000, 'change_pct': 3,
+             'loan': {'balance': 300000, 'rate_pct': 6, 'payment_monthly': 2000,
+                      'category': 'Mortgage'}},
+            {'name': 'Car', 'type': 'car', 'value': 20000, 'life_years': 12, 'age_years': 4,
+             'end_value': 3000, 'replace_cost': 35000},
+            {'name': 'Rental', 'type': 'rental', 'value': 300000, 'rent_monthly': 1500}]})
+    house, car, rental = cfg.properties
+    assert [p.id for p in cfg.properties] == ['house', 'car', 'rental']
+    assert house.loan is not None and house.loan.category == 'Mortgage'
+    assert (car.type, car.life_years, car.replace, car.replace_cost) == ('car', 12, True, 35000)
+    assert rental.rent_monthly == 1500
+
+
+def test_a_loan_must_be_paid_off() -> None:
+    with pytest.raises(ValueError, match='never pays'):
+        Config.model_validate({'properties': [{'name': 'House', 'loan': {
+            'balance': 300000, 'rate_pct': 6, 'payment_monthly': 1500}}]})
+
+
+def test_a_loan_category_must_be_spending_or_annual() -> None:
+    with pytest.raises(ValueError, match='loan category'):
+        Config.model_validate({'categories': [{'name': 'Refund', 'kind': 'credit'}],
+                               'properties': [{'name': 'House', 'loan': {
+                                   'balance': 1000, 'payment_monthly': 100,
+                                   'category': 'Refund'}}]})
+
+
+def test_property_age_must_be_less_than_its_life() -> None:
+    with pytest.raises(ValueError, match='age_years'):
+        Config.model_validate({'properties': [{'name': 'Car', 'life_years': 10,
+                                               'age_years': 10}]})
+
+
 def test_contribution_rest_excludes_left_pct() -> None:
     assert Config.model_validate({'investments': [{'name': 'Stocks', 'rest': True}]}) \
         .investments[0].rest
