@@ -36,7 +36,12 @@ household:
       accounts:
         - name: 403(b)
           balance: 61000
-          monthly: 600
+          monthly: 600            # pre-tax (the default): out of pay, before take-home
+          employer_monthly: 300   # the employer's match, on top
+        - name: Roth IRA
+          balance: 12000
+          pre_tax: false          # from take-home: a savings line like the others
+          monthly: 250
   children:
     - id: riley
       name: Riley
@@ -82,6 +87,27 @@ investments:
     balance: 8000
     return_pct: 4
     monthly: 0
+
+
+# Homes, cars and rentals. A loan's payoff comes from its balance, rate and payment; with a
+# `category`, the projections drop the payment from it once paid off. Something with a
+# `life_years` loses value down to `end_value`; if `replace` (the default), Budgeting gets a
+# yearly "Replace ..." annual expense of (replace_cost - end_value) / life_years.
+properties:
+  - id: home
+    name: Home
+    type: home
+    value: 540000
+    change_pct: 3
+    loan: {balance: 286000, rate_pct: 3.25, payment_monthly: 2650, category: Housing}
+  - id: car
+    name: Minivan
+    type: car
+    value: 21000
+    life_years: 12
+    age_years: 5
+    end_value: 4000
+    replace_cost: 42000
 
 assumptions:
   retirement:
