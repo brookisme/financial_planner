@@ -211,9 +211,14 @@ class App:
             return
         notify(f'Updating Financial Planner to {latest}…')
         self.stop()
-        result = subprocess.run([pixi, 'update', '--manifest-path', manifest],
-                                capture_output=True, text=True)
-        log(f'pixi update: {result.returncode}\n{result.stdout}\n{result.stderr}')
+        # `pixi update` only rewrites the lock file; `pixi install` puts it into the environment
+        # (the app runs the environment's python directly, so nothing else would sync it).
+        for step in ('update', 'install'):
+            result = subprocess.run([pixi, step, '--manifest-path', manifest],
+                                    capture_output=True, text=True)
+            log(f'pixi {step}: {result.returncode}\n{result.stdout}\n{result.stderr}')
+            if result.returncode != 0:
+                break
         if result.returncode != 0:
             self.start()
             alert(f'The update failed; still on {__version__}. Details are in {LOG_FILE}.')
