@@ -21,6 +21,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
+from financial_planner import amazon
 from financial_planner.schema import Source
 
 #
@@ -106,10 +107,17 @@ def load_transactions(plan_dir: Path, sources: Iterable[Source]) -> tuple[list[T
 
     Returns:
         All transactions (oldest first) and a list of warnings (missing files, skipped rows).
+        Amazon rows are kept to the dates the other sources cover (an export goes back years).
     """
     out: list[Transaction] = []
     warnings: list[str] = []
+    shop: list[Transaction] = []
     for source in sources:
+        if source.kind == 'amazon':
+            rows, notes = _read_amazon(plan_dir, source)
+            shop += rows
+            warnings += notes
+            continue
         paths = resolve_files(plan_dir, source.files)
         if not paths:
             warnings.append(f'{source.name}: no files match {", ".join(source.files)}')
@@ -129,6 +137,11 @@ def load_transactions(plan_dir: Path, sources: Iterable[Source]) -> tuple[list[T
                 tx.file = str(path.relative_to(plan_dir)) if path.is_relative_to(plan_dir) \
                     else str(path)
                 out.append(tx)
+    if shop and out:
+        first, last = min(t.date for t in out), max(t.date for t in out)
+        out += [t for t in shop if first <= t.date <= last]
+    else:
+        out += shop
     out.sort(key=lambda t: (t.date, t.source, t.description))
     return out, warnings
 
@@ -166,6 +179,7 @@ def read_source_file(path: Path, source: Source) -> tuple[list[Transaction], int
     Raises:
         SourceError: If the file can't be read or a configured column is missing.
     """
+    assert source.date and source.amount, 'a csv source has date and amount (schema)'
     header, rows = read_csv(path, source.encoding, source.delimiter, source.skip_rows)
     needed = [source.date.column, *source.description]
     needed += [c for c in (source.amount.column, source.amount.debit, source.amount.credit) if c]
@@ -358,6 +372,32 @@ def _row_amount(row: dict[str, str], source: Source) -> Optional[float]:
     if debit is None and credit is None:
         return None
     return abs(debit or 0.0) - abs(credit or 0.0)
+
+
+def _read_amazon(plan_dir: Path, source: Source) -> tuple[list[Transaction], list[str]]:
+    """An Amazon source: every item and refund in its export folder(s) as a transaction.
+
+    Amazon's department is the bank category; the kind (order, digital, refund), card, order id
+    and export name are raw fields rules can use.
+    """
+    roots: list[Path] = []
+    for pattern in source.files:
+        full = pattern if Path(pattern).is_absolute() else str(Path(plan_dir) / pattern)
+        roots += [Path(p) for p in sorted(glob.glob(full)) if Path(p).is_dir()]
+    if not roots:
+        return [], [f'{source.name}: no folders match {", ".join(source.files)}']
+    items, warnings = amazon.load_items(roots, cards=source.cards or None)
+    seen: dict[str, int] = {}
+    out = []
+    for i in items:
+        tx = Transaction(id='', source=source.name, date=i.date, description=i.description,
+                         amount=i.amount, bank_category=i.department,
+                         raw={'Department': i.department, 'Kind': i.kind, 'Card': i.card,
+                              'Order ID': i.order_id, 'Account': i.account})
+        tx.id = _make_id(tx, seen)
+        tx.file = source.files[0]
+        out.append(tx)
+    return out, [f'{source.name}: {w}' for w in warnings]
 
 
 def _make_id(tx: Transaction, seen: dict[str, int]) -> str:
