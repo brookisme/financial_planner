@@ -113,8 +113,11 @@ const BODY = `
     makes it grow. With no emergency fund it counts as spending.</li>
   <li><b>The cards on the right</b> (income, savings, annual expenses, emergency costs) fold with
     ▾ / ▸; <i>Collapse Settings</i> in the Budgets bar folds them all.</li>
-  <li><i>Fill from Spending</i> sets Planned / mo to the averages of the period shown in Spending.
-    <i>Try 10% less on flexible spending</i> trims the categories marked flexible.</li>
+  <li><b>Planned / mo</b> starts at the 12-month averages. Its column heading is a menu: fill the
+    column from the <i>Spending chart</i> (the averages of the period it shows), the 12-mo avg or
+    any saved budget. Only the planned categories and credits change, not income, savings or
+    annual expenses. <i>Try 10% less on flexible spending</i> trims the categories marked
+    flexible.</li>
 </ul>
 
 <h3 id="h-cat">Categorizing</h3>
