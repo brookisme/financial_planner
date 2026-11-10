@@ -109,7 +109,9 @@ function buildTable(): void {
   h += `<tr class="total"><td>Total regular spending</td>
     <td class="num" id="t-p" style="padding-right:14px"></td><td class="num" id="t-c"></td>
     <td><span class="delta num" id="t-d"></span></td></tr>`;
-  const loose = d.credits.filter((c) => d.isPlannerCredit(c) && !d.cats[c].offsets);
+  // credits not shown under a regular category (none, an annual cost, or a name that isn't one)
+  const loose = d.credits.filter((c) => d.isPlannerCredit(c) &&
+                                        !d.regular.includes(d.idx(d.cats[c].offsets ?? '')));
   if (loose.length) h += loose.map(creditRow).join('');
   const body = $('ptbody');
   body.innerHTML = h;
