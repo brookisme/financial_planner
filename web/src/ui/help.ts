@@ -41,7 +41,10 @@ const BODY = `
   <tr><td>Assumptions</td><td>Titles, how many months to average, retirement and college
     assumptions and presets.</td></tr>
   <tr><td>Data sources</td><td>One per kind of CSV export. Pick the file, click <i>Read columns</i>,
-    check the date, description and amount columns, then <i>Preview</i>.</td></tr>
+    check the date, description and amount columns, then <i>Preview</i>. <i>+ Add Amazon
+    export</i> takes Amazon's data export (.zip) so each item gets its own category: tick the
+    cards in the plan, and the bank's own Amazon charges are set aside so nothing counts twice.
+    The Amazon card shows how close the itemized total is to the bank's.</td></tr>
   <tr><td>Categories</td><td>Names, kinds (regular, annual expense, 1-time purchase, emergency fund
     cost, credit, ignore), planner groups and
     how each changes when the kids leave or you retire.</td></tr>
