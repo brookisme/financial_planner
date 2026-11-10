@@ -63,6 +63,7 @@ More: [Desktop App](https://github.com/brookisme/financial_planner/wiki/Desktop-
 - **Monthly planner**: every category at its average; change any number and see what's left over.
 - **Explore spending**: monthly charts, top merchants and every transaction.
 - **College 529s**: a projection for each child against the cost of college.
+- **Property**: homes, cars and rentals: value, loans and payoff, replacement and rent.
 - **Retirement**: income at each retirement age from pensions, accounts, investments and Social Security.
 - **Spending over time**: how costs change as children leave home and after retiring.
 - **Scenarios**: save, compare and share what-ifs, or share the whole plan as one file.
