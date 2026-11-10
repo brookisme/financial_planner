@@ -22,18 +22,30 @@ SCRIPT: Path = Path(__file__).resolve().parents[1] / 'scripts' / 'frame_screensh
 #
 # PUBLIC
 #
-def test_frame_rounds_corners_and_draws_a_border(tmp_path: Path) -> None:
+def test_frame_pads_rounds_corners_and_draws_a_border(tmp_path: Path) -> None:
     fs = _load()
     path = tmp_path / 'shot.png'
-    Image.new('RGB', (120, 80), (255, 255, 255)).save(path)
+    img = Image.new('RGB', (120, 80), (240, 240, 240))           # page color in the corners
+    img.paste((255, 255, 255), (10, 10, 110, 70))                # a white card
+    img.save(path)
     assert fs.main([str(path)]) == 0
-    img = Image.open(path)
-    assert img.mode == 'RGBA' and img.size == (120, 80)
-    assert img.getpixel((0, 0))[3] == 0                       # corner is transparent
-    assert img.getpixel((60, 40)) == (255, 255, 255, 255)     # middle unchanged
-    r, g, b, a = img.getpixel((60, 0))                        # top edge is the gray border
-    assert a == 255 and r < 255 and abs(r - 208) < 30
-    assert fs.is_framed(img)
+    out = Image.open(path)
+    edge = fs.PADDING + fs.BORDER_WIDTH
+    assert out.mode == 'RGBA' and out.size == (120 + 2 * edge, 80 + 2 * edge)
+    assert out.getpixel((0, 0))[3] == 0                           # corner is transparent
+    assert out.getpixel((60 + edge, 40 + edge)) == (255, 255, 255, 255)   # card unchanged
+    assert out.getpixel((60, fs.BORDER_WIDTH + 2)) == (240, 240, 240, 255)  # padded in page color
+    assert all(abs(a - b) < 8 for a, b in zip(out.getpixel((60, 0)), fs.BORDER))   # gray border
+    assert fs.is_framed(out)
+
+
+def test_frame_clears_a_dialog_backdrop() -> None:
+    fs = _load()
+    img = Image.new('RGB', (60, 60), (130, 130, 130))             # dark backdrop corners
+    img.paste((255, 255, 255), (3, 3, 57, 57))
+    out = fs.frame(img)
+    edge = fs.PADDING + fs.BORDER_WIDTH
+    assert out.getpixel((edge, edge)) == fs.PAGE                 # backdrop painted page color
 
 
 def test_frame_skips_framed_images_and_named_files(tmp_path: Path, capsys) -> None:
