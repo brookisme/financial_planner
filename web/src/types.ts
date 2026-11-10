@@ -40,11 +40,15 @@ export interface Pension {
   grows_with_raises: boolean;
 }
 
-/** A retirement account. */
-export interface Account {
+/**
+ * A retirement account. Pre-tax contributions come out of pay (a fixed monthly); post-tax ones are
+ * a savings line like the others. The employer adds employer_monthly on top.
+ */
+export interface Account extends Contribution {
   name: string;
   balance: number;
-  monthly: number;
+  pre_tax: boolean;
+  employer_monthly: number;
 }
 
 /** One adult. */
@@ -80,6 +84,31 @@ export interface SavingsAccount extends Contribution {
   overflow_to: string|null;
   return_pct: number;
   stops_at_retirement: boolean;
+}
+
+/** A loan against a property. */
+export interface Loan {
+  balance: number;
+  rate_pct: number;
+  payment_monthly: number;
+  category: string|null;
+}
+
+/** A home, car, rental or other thing owned (see schema.Property). */
+export interface Property {
+  id: string;
+  name: string;
+  type: 'home'|'car'|'rental'|'other';
+  value: number;
+  change_pct: number;
+  loan: Loan|null;
+  life_years: number|null;
+  age_years: number;
+  end_value: number;
+  replace: boolean;
+  replace_cost: number|null;
+  replace_in_todays_dollars: boolean;
+  rent_monthly: number;
 }
 
 /** A stock or bond account. */
@@ -156,6 +185,7 @@ export interface Payload {
   other_income_monthly: number;
   savings: SavingsAccount[];
   investments: Investment[];
+  properties?: Property[];
   assumptions: Assumptions;
   counts: {transactions: number; in_window: number};
   warnings: string[];
@@ -225,7 +255,7 @@ export interface RetireState {
   ssAmt: Record<string, number>;
   claim: Record<string, number|null>;
   pen: Record<string, {on: boolean; est: Record<string, number>; monthly: number|null}>;
-  acct: Record<string, {on: boolean; bal: number; monthly: number}>;
+  acct: Record<string, {on: boolean; bal: number}>;
   inv: Record<string, {bal: number; ret: number}>;
   draw: Record<string, number|null>;
 }
