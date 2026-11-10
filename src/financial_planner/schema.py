@@ -453,14 +453,19 @@ class AmountSpec(_Model):
 
 
 class Source(_Model):
-    """One CSV export (a card, a bank account...).
+    """One CSV export (a card, a bank account...) or an Amazon data export.
 
     Attributes:
         name: Label, e.g. "Visa card".
-        files: File name(s) or glob(s) relative to the plan folder, e.g. ``data/visa*.csv``.
-        date: Date column and format.
-        description: Column(s) joined to make the description.
-        amount: Amount column(s).
+        kind: ``csv`` (a bank or card export) or ``amazon`` (an Amazon "Request your data"
+            export: every item and refund becomes a transaction, see the ``amazon`` module).
+        files: File name(s) or glob(s) relative to the plan folder, e.g. ``data/visa*.csv``. For
+            ``amazon``: the export folder(s), e.g. ``data/amazon``.
+        cards: ``amazon`` only: keep orders paid with these card endings (the cards whose
+            statements are in the plan). Empty keeps every card.
+        date: Date column and format (``csv``).
+        description: Column(s) joined to make the description (``csv``).
+        amount: Amount column(s) (``csv``).
         category_column: Optional column with the bank's own category (rules can use it).
         category_map: Bank category -> plan category, used when no rule matches.
         skip_rows: Lines to skip before the header row.
@@ -468,10 +473,12 @@ class Source(_Model):
         delimiter: Field separator.
     """
     name: str
+    kind: Literal['csv', 'amazon'] = 'csv'
     files: list[str]
-    date: DateSpec
-    description: list[str]
-    amount: AmountSpec
+    cards: list[str] = Field(default_factory=list)
+    date: Optional[DateSpec] = None
+    description: list[str] = Field(default_factory=list)
+    amount: Optional[AmountSpec] = None
     category_column: Optional[str] = None
     category_map: dict[str, str] = Field(default_factory=dict)
     skip_rows: int = 0
@@ -483,6 +490,23 @@ class Source(_Model):
     def _listify(cls, value: Any) -> Any:
         """Allow a single string where a list is expected."""
         return [value] if isinstance(value, str) else value
+
+    @field_validator('cards', mode='before')
+    @classmethod
+    def _card_text(cls, value: Any) -> Any:
+        """Card endings as text (YAML reads 1234 as a number)."""
+        if isinstance(value, (str, int)):
+            value = [value]
+        return [str(v) for v in value] if isinstance(value, list) else value
+
+    @model_validator(mode='after')
+    def _csv_columns(self) -> 'Source':
+        """A CSV source needs its date, description and amount columns."""
+        if self.kind == 'csv':
+            missing = [k for k in ('date', 'description', 'amount') if not getattr(self, k)]
+            if missing:
+                raise ValueError(f'source {self.name!r}: missing {", ".join(missing)}')
+        return self
 
 
 class Category(_Model):
